@@ -3,7 +3,7 @@
 Portable **Zig + Sokol** graphics prototype with a custom **immediate-mode UI**
 (Style A: `begin` / `end` + `defer`).
 
-Copyright © 2026 [Mike Smullin](mailto:mike@smullindesign.com) — MIT License.
+<img width="1100" height="734" alt="image" src="https://github.com/user-attachments/assets/3435be01-3d94-4e1d-9f0a-a3c5c4d64bf3" />
 
 ## Requirements
 
