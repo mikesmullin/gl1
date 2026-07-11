@@ -30,13 +30,14 @@ zig build
 | `widgets_basic` | Label, button, slider, text field, … |
 | `panels` | `beginPanel` / `endPanel` |
 | `layout` | vstack / hstack |
+| `inspector` | Menubar + entity list + form + modal (composite) |
 
 **Keys**
 
 | Input | Action |
 |-------|--------|
-| **Ctrl+0…6** | Switch scene |
-| **Esc** | Quit |
+| **Ctrl+0…7** | Switch scene |
+| **Esc** | Close modal → clear text focus → quit |
 
 Digits and Shift+digit (e.g. `!`) are free for typing. Scene shortcuts require **Ctrl**.
 

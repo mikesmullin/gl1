@@ -90,6 +90,26 @@ pub const Ui = struct {
     /// Focus for text input.
     focus: Id = .{},
 
+    /// Tooltip: set via `setTooltip` while a widget is hot; drawn in `endFrame`.
+    tooltip_text: [128]u8 = undefined,
+    tooltip_len: usize = 0,
+    tooltip_set: bool = false,
+
+    /// Toast stack (app can also call `toast`).
+    toasts: [4]Toast = .{.{}, .{}, .{}, .{}},
+    toast_count: usize = 0,
+
+    /// True if a modal consumed Esc this frame (app should not quit).
+    consumed_escape: bool = false,
+
+    pub const ToastKind = enum { info, ok, warn, err };
+    pub const Toast = struct {
+        text: [96]u8 = undefined,
+        len: usize = 0,
+        expires: f64 = 0,
+        kind: ToastKind = .info,
+    };
+
     pub fn init(self: *Ui, allocator: std.mem.Allocator) void {
         self.allocator = allocator;
         self.scroll_y = std.AutoHashMap(u64, f32).init(allocator);
@@ -120,6 +140,23 @@ pub const Ui = struct {
         self.id_depth = 0;
         self.curr_count = 0;
         self.cmds.clear();
+        self.tooltip_set = false;
+        self.tooltip_len = 0;
+        self.consumed_escape = false;
+
+        // Expire toasts.
+        var ti: usize = 0;
+        while (ti < self.toast_count) {
+            if (self.toasts[ti].expires <= time) {
+                var j = ti;
+                while (j + 1 < self.toast_count) : (j += 1) {
+                    self.toasts[j] = self.toasts[j + 1];
+                }
+                self.toast_count -= 1;
+            } else {
+                ti += 1;
+            }
+        }
 
         // Root free layout = full window.
         self.layout_stack[0] = .{
@@ -150,6 +187,70 @@ pub const Ui = struct {
         // Swap prev geometry.
         self.prev_rects = self.curr_rects;
         self.prev_count = self.curr_count;
+
+        // Draw tooltip near cursor (after widgets).
+        if (self.tooltip_set and self.tooltip_len > 0) {
+            const msg = self.tooltip_text[0..self.tooltip_len];
+            const m = self.font.measure(msg, self.theme.font_size);
+            const pad: f32 = 6;
+            var tx = self.input.mouse_x + 14;
+            var ty = self.input.mouse_y + 16;
+            if (tx + m.w + pad * 2 > self.width) tx = self.width - m.w - pad * 2;
+            if (ty + m.h + pad * 2 > self.height) ty = self.input.mouse_y - m.h - pad * 2 - 8;
+            const tr = Rect{ .x = tx, .y = ty, .w = m.w + pad * 2, .h = m.h + pad * 2 };
+            self.drawRectBorder(tr, self.theme.tooltip_bg, self.theme.panel_border, 1);
+            self.drawText(tr.x + pad, tr.y + pad, self.theme.font_size, self.theme.text, msg);
+        }
+
+        // Draw toasts bottom-right.
+        if (self.toast_count > 0) {
+            var y = self.height - 16;
+            var k: usize = self.toast_count;
+            while (k > 0) {
+                k -= 1;
+                const t = self.toasts[k];
+                const msg = t.text[0..t.len];
+                const m = self.font.measure(msg, self.theme.font_size);
+                const pad: f32 = 10;
+                const tw = m.w + pad * 2;
+                const th = m.h + pad * 2;
+                y -= th + 8;
+                const tr = Rect{ .x = self.width - tw - 16, .y = y, .w = tw, .h = th };
+                const accent: Color = switch (t.kind) {
+                    .info => self.theme.info,
+                    .ok => self.theme.accent,
+                    .warn => self.theme.warning,
+                    .err => self.theme.danger,
+                };
+                self.drawRectBorder(tr, self.theme.toast_bg, accent, 2);
+                self.drawText(tr.x + pad, tr.y + pad, self.theme.font_size, self.theme.text, msg);
+            }
+        }
+    }
+
+    pub fn setTooltip(self: *Ui, text: []const u8) void {
+        const n = @min(text.len, self.tooltip_text.len);
+        @memcpy(self.tooltip_text[0..n], text[0..n]);
+        self.tooltip_len = n;
+        self.tooltip_set = true;
+    }
+
+    pub fn toast(self: *Ui, text: []const u8, kind: ToastKind, duration_s: f64) void {
+        if (self.toast_count >= self.toasts.len) {
+            // Drop oldest.
+            var j: usize = 0;
+            while (j + 1 < self.toast_count) : (j += 1) {
+                self.toasts[j] = self.toasts[j + 1];
+            }
+            self.toast_count -= 1;
+        }
+        var t = &self.toasts[self.toast_count];
+        const n = @min(text.len, t.text.len);
+        @memcpy(t.text[0..n], text[0..n]);
+        t.len = n;
+        t.kind = kind;
+        t.expires = self.time + duration_s;
+        self.toast_count += 1;
     }
 
     pub fn id(self: *Ui, name: []const u8) Id {
@@ -740,6 +841,238 @@ pub const Ui = struct {
                 changed = true;
             }
         }
+        return changed;
+    }
+
+    /// Collapsible section header. Returns true while expanded (draw children inside).
+    pub fn beginCollapsible(self: *Ui, opts: struct { id: []const u8, title: []const u8, open: *bool }) bool {
+        const i = self.id(opts.id);
+        const r = self.alloc(0, self.theme.row_h);
+        const full = Rect{ .x = r.x, .y = r.y, .w = self.top().width - 2 * self.top().pad, .h = self.theme.row_h };
+        const st = self.interact(i, full, false);
+        if (st.clicked) opts.open.* = !opts.open.*;
+        if (st.hot) self.setTooltip(if (opts.open.*) "Click to collapse" else "Click to expand");
+        self.drawRect(full, if (st.hot) self.theme.button_hot else self.theme.button);
+        const arrow: []const u8 = if (opts.open.*) "v " else "> ";
+        self.drawText(full.x + 6, full.y + 6, self.theme.font_size, self.theme.accent, arrow);
+        const am = self.font.measure(arrow, self.theme.font_size);
+        self.drawText(full.x + 6 + am.w, full.y + 6, self.theme.font_size, self.theme.text, opts.title);
+        if (opts.open.*) {
+            self.pushId(opts.id);
+            self.beginVStack(.{
+                .x = full.x,
+                .y = full.y + full.h,
+                .w = full.w,
+                .h = 400,
+                .pad = 4,
+                .gap = self.theme.gap,
+            });
+        }
+        return opts.open.*;
+    }
+
+    pub fn endCollapsible(self: *Ui, open: bool) void {
+        if (!open) return;
+        _ = self.endVStack();
+        self.popId();
+    }
+
+    /// Centered modal. While open, dims the background. Esc closes (`open` -> false).
+    pub fn beginModal(self: *Ui, opts: struct {
+        id: []const u8,
+        title: []const u8,
+        open: *bool,
+        w: f32 = 400,
+        h: f32 = 280,
+    }) bool {
+        if (!opts.open.*) return false;
+
+        // Dim full window.
+        self.drawRect(.{ .x = 0, .y = 0, .w = self.width, .h = self.height }, self.theme.overlay);
+
+        if (self.input.keyPressed(.escape)) {
+            opts.open.* = false;
+            self.consumed_escape = true;
+            return false;
+        }
+
+        const mw = opts.w;
+        const mh = opts.h;
+        const mx = (self.width - mw) * 0.5;
+        const my = (self.height - mh) * 0.5;
+        const r = Rect{ .x = mx, .y = my, .w = mw, .h = mh };
+        self.remember(self.id(opts.id), r);
+        self.drawRectBorder(r, self.theme.modal, self.theme.accent, 2);
+
+        // Title bar
+        const th = self.theme.row_h;
+        self.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = th }, .{ 0.12, 0.13, 0.16, 1 });
+        self.drawText(r.x + self.theme.pad, r.y + 6, self.theme.title_font_size, self.theme.text, opts.title);
+
+        // Close button
+        const cr = Rect{ .x = r.x + r.w - 28, .y = r.y + 4, .w = 22, .h = 20 };
+        const ci = self.id("modal_close");
+        const cst = self.interact(ci, cr, false);
+        self.drawRect(cr, if (cst.hot) self.theme.danger else self.theme.button);
+        self.drawText(cr.x + 6, cr.y + 3, self.theme.font_size, self.theme.text, "x");
+        if (cst.clicked) {
+            opts.open.* = false;
+            return false;
+        }
+
+        self.pushId(opts.id);
+        self.beginVStack(.{
+            .x = r.x,
+            .y = r.y + th,
+            .w = r.w,
+            .h = r.h - th,
+            .pad = self.theme.pad,
+            .gap = self.theme.gap,
+        });
+        return true;
+    }
+
+    pub fn endModal(self: *Ui) void {
+        _ = self.endVStack();
+        self.popId();
+    }
+
+    /// Top menubar strip. Returns height used.
+    pub fn beginMenubar(self: *Ui, opts: struct { id: []const u8 = "menubar" }) f32 {
+        const h = self.theme.menubar_h;
+        const r = Rect{ .x = 0, .y = 0, .w = self.width, .h = h };
+        self.drawRect(r, self.theme.menubar);
+        self.drawRect(.{ .x = 0, .y = h - 1, .w = self.width, .h = 1 }, self.theme.panel_border);
+        self.pushId(opts.id);
+        self.beginHStack(.{ .x = 0, .y = 0, .w = self.width, .h = h, .pad = 4, .gap = 2 });
+        return h;
+    }
+
+    pub fn endMenubar(self: *Ui) void {
+        _ = self.endHStack();
+        self.popId();
+    }
+
+    /// Menu item inside menubar (or any hstack).
+    pub fn menuItem(self: *Ui, opts: struct { id: []const u8, label: []const u8 }) bool {
+        const m = self.font.measure(opts.label, self.theme.font_size);
+        const r = self.alloc(m.w + 20, self.theme.menubar_h - 6);
+        const i = self.id(opts.id);
+        const st = self.interact(i, r, false);
+        if (st.hot) self.drawRect(r, self.theme.button_hot);
+        self.drawText(r.x + 10, r.y + 4, self.theme.font_size, self.theme.text, opts.label);
+        return st.clicked;
+    }
+
+    /// Bottom status bar.
+    pub fn statusBar(self: *Ui, left: []const u8, right: []const u8) void {
+        const h = self.theme.statusbar_h;
+        const r = Rect{ .x = 0, .y = self.height - h, .w = self.width, .h = h };
+        self.drawRect(r, self.theme.statusbar);
+        self.drawRect(.{ .x = 0, .y = r.y, .w = self.width, .h = 1 }, self.theme.panel_border);
+        self.drawText(r.x + 8, r.y + 5, self.theme.font_size, self.theme.text_dim, left);
+        const rm = self.font.measure(right, self.theme.font_size);
+        self.drawText(r.x + r.w - rm.w - 8, r.y + 5, self.theme.font_size, self.theme.text_dim, right);
+    }
+
+    /// Simple list row selector.
+    pub fn listBox(self: *Ui, opts: struct {
+        id: []const u8,
+        items: []const []const u8,
+        selected: *usize,
+        w: f32 = 200,
+        h: f32 = 160,
+    }) bool {
+        const i = self.id(opts.id);
+        const r = self.alloc(opts.w, opts.h);
+        self.remember(i, r);
+        self.drawRectBorder(r, self.theme.input_bg, self.theme.panel_border, 1);
+        var changed = false;
+        const item_h = self.theme.row_h - 4;
+        self.pushId(opts.id);
+        defer self.popId();
+        self.cmds.push(.{ .scissor_push = .{ .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 } });
+        for (opts.items, 0..) |item, idx| {
+            const ir = Rect{
+                .x = r.x + 2,
+                .y = r.y + 2 + @as(f32, @floatFromInt(idx)) * item_h,
+                .w = r.w - 4,
+                .h = item_h,
+            };
+            const iid = self.id(item);
+            const st = self.interact(iid, ir, false);
+            const on = opts.selected.* == idx;
+            if (on or st.hot) {
+                self.drawRect(ir, if (on) self.theme.selected else self.theme.button_hot);
+            }
+            self.drawText(ir.x + 6, ir.y + 5, self.theme.font_size, self.theme.text, item);
+            if (st.clicked) {
+                opts.selected.* = idx;
+                changed = true;
+            }
+        }
+        self.cmds.push(.{ .scissor_pop = {} });
+        return changed;
+    }
+
+    /// Color swatch button (shows color; returns true on click).
+    pub fn colorSwatch(self: *Ui, opts: struct { id: []const u8, color: Color, selected: bool = false, w: f32 = 28 }) bool {
+        const r = self.alloc(opts.w, opts.w);
+        const i = self.id(opts.id);
+        const st = self.interact(i, r, false);
+        const border: Color = if (opts.selected or st.hot) self.theme.accent else self.theme.panel_border;
+        self.drawRectBorder(r, opts.color, border, if (opts.selected) 2 else 1);
+        return st.clicked;
+    }
+
+    /// Number spinner (float) with − / + buttons.
+    pub fn spinner(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        value: *f32,
+        min: f32 = 0,
+        max: f32 = 100,
+        step: f32 = 1,
+        w: f32 = 160,
+    }) bool {
+        const size = self.theme.font_size;
+        const r = self.alloc(opts.w, self.theme.row_h + 12);
+        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
+        const row_y = r.y + 12;
+        const bh = self.theme.button_h - 4;
+        const bw: f32 = 28;
+        var changed = false;
+
+        self.pushId(opts.id);
+        defer self.popId();
+
+        const minus_r = Rect{ .x = r.x, .y = row_y, .w = bw, .h = bh };
+        const plus_r = Rect{ .x = r.x + opts.w - bw, .y = row_y, .w = bw, .h = bh };
+        const mid = Rect{ .x = r.x + bw + 4, .y = row_y, .w = opts.w - 2 * bw - 8, .h = bh };
+
+        const mi = self.id("minus");
+        const pi = self.id("plus");
+        const mst = self.interact(mi, minus_r, false);
+        const pst = self.interact(pi, plus_r, false);
+        self.drawRectBorder(minus_r, if (mst.hot) self.theme.button_hot else self.theme.button, self.theme.panel_border, 1);
+        self.drawRectBorder(plus_r, if (pst.hot) self.theme.button_hot else self.theme.button, self.theme.panel_border, 1);
+        self.drawText(minus_r.x + 10, minus_r.y + 5, size, self.theme.text, "-");
+        self.drawText(plus_r.x + 10, plus_r.y + 5, size, self.theme.text, "+");
+        self.drawRectBorder(mid, self.theme.input_bg, self.theme.panel_border, 1);
+
+        if (mst.clicked) {
+            opts.value.* = @max(opts.min, opts.value.* - opts.step);
+            changed = true;
+        }
+        if (pst.clicked) {
+            opts.value.* = @min(opts.max, opts.value.* + opts.step);
+            changed = true;
+        }
+
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d:.2}", .{opts.value.*}) catch "?";
+        const sm = self.font.measure(s, size);
+        self.drawText(mid.x + (mid.w - sm.w) * 0.5, mid.y + 5, size, self.theme.text, s);
         return changed;
     }
 };

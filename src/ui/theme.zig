@@ -1,4 +1,4 @@
-//! Dark theme tokens (v1).
+//! Theme tokens — dark-first (user preference).
 
 pub const Color = [4]f32;
 
@@ -18,8 +18,16 @@ pub const Theme = struct {
     slider_track: Color = .{ 0.18, 0.19, 0.22, 1 },
     slider_fill: Color = .{ 0.30, 0.55, 0.40, 1 },
     danger: Color = .{ 0.85, 0.35, 0.35, 1 },
+    warning: Color = .{ 0.90, 0.70, 0.25, 1 },
+    info: Color = .{ 0.35, 0.60, 0.90, 1 },
     sidebar: Color = .{ 0.12, 0.13, 0.16, 1 },
     selected: Color = .{ 0.22, 0.35, 0.28, 1 },
+    overlay: Color = .{ 0.0, 0.0, 0.0, 0.55 },
+    modal: Color = .{ 0.16, 0.17, 0.21, 1 },
+    tooltip_bg: Color = .{ 0.08, 0.09, 0.11, 0.95 },
+    toast_bg: Color = .{ 0.18, 0.22, 0.20, 0.95 },
+    menubar: Color = .{ 0.13, 0.14, 0.17, 1 },
+    statusbar: Color = .{ 0.11, 0.12, 0.15, 1 },
 
     pad: f32 = 8,
     gap: f32 = 6,
@@ -28,6 +36,18 @@ pub const Theme = struct {
     title_font_size: f32 = 2.5,
     row_h: f32 = 28,
     button_h: f32 = 28,
+    menubar_h: f32 = 28,
+    statusbar_h: f32 = 24,
 };
 
 pub const dark = Theme{};
+
+/// Slightly cooler / bluer dark variant for A/B in storybook.
+pub const dark_cool = Theme{
+    .bg = .{ 0.08, 0.09, 0.12, 1 },
+    .panel = .{ 0.12, 0.14, 0.18, 1 },
+    .accent = .{ 0.40, 0.70, 0.95, 1 },
+    .accent_hot = .{ 0.50, 0.80, 1.0, 1 },
+    .slider_fill = .{ 0.30, 0.50, 0.75, 1 },
+    .selected = .{ 0.18, 0.28, 0.40, 1 },
+};

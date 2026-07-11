@@ -106,15 +106,14 @@ fn trySceneHotkeys() void {
     if (g.input.keyPressed(.four)) g.scene = .widgets_basic;
     if (g.input.keyPressed(.five)) g.scene = .panels;
     if (g.input.keyPressed(.six)) g.scene = .layout;
+    if (g.input.keyPressed(.seven)) g.scene = .inspector;
     if (g.input.keyPressed(.zero)) g.scene = .storybook;
 }
 
 export fn event(ev: [*c]const sapp.Event) void {
     g.input.handleEvent(ev);
-    if (g.input.keyPressed(.escape)) {
-        sapp.quit();
-    }
     trySceneHotkeys();
+    // Esc handled after frame so modals can consume it first.
 }
 
 export fn frame() void {
@@ -153,6 +152,16 @@ export fn frame() void {
     sgl.draw();
     sg.endPass();
     sg.commit();
+
+    // Esc: modal/UI may have consumed it; otherwise quit.
+    if (g.input.keyPressed(.escape) and !g.ui.consumed_escape) {
+        // Also clear text focus before quitting if focused.
+        if (!g.ui.focus.isNone()) {
+            g.ui.focus = .{};
+        } else {
+            sapp.quit();
+        }
+    }
 
     g.input.beginFrame();
 }

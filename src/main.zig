@@ -22,10 +22,11 @@ const HELP =
     \\  widgets_basic   label/button/slider/…
     \\  panels          begin/end panels
     \\  layout          vstack/hstack
+    \\  inspector       composite app chrome demo
     \\
     \\keys:
-    \\  Ctrl+0..6       switch scenes
-    \\  Esc             quit
+    \\  Ctrl+0..7       switch scenes
+    \\  Esc             close modal / clear focus / quit
     \\
 ;
 
