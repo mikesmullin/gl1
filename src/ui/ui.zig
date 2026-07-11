@@ -102,6 +102,17 @@ pub const Ui = struct {
     /// True if a modal consumed Esc this frame (app should not quit).
     consumed_escape: bool = false,
 
+    /// Active drag (splitter, etc.).
+    drag: Id = .{},
+    drag_anchor: f32 = 0,
+    drag_value0: f32 = 0,
+
+    /// Context menu (right-click).
+    ctx_open: bool = false,
+    ctx_x: f32 = 0,
+    ctx_y: f32 = 0,
+    ctx_owner: Id = .{},
+
     pub const ToastKind = enum { info, ok, warn, err };
     pub const Toast = struct {
         text: [96]u8 = undefined,
@@ -143,6 +154,10 @@ pub const Ui = struct {
         self.tooltip_set = false;
         self.tooltip_len = 0;
         self.consumed_escape = false;
+        // Clear drag when mouse released.
+        if (!input.mouseDown(.left) and !self.drag.isNone()) {
+            self.drag = .{};
+        }
 
         // Expire toasts.
         var ti: usize = 0;
@@ -291,6 +306,20 @@ pub const Ui = struct {
         var n: usize = 0;
         while (n < self.prev_count) : (n += 1) {
             if (self.prev_rects[n].id.eq(i)) return self.prev_rects[n].r;
+        }
+        return null;
+    }
+
+    /// Lookup previous-frame rect by widget id name (same hashing as `id()`).
+    pub fn prevRectOf(self: *Ui, name: []const u8) ?Rect {
+        return self.prevRect(self.id(name));
+    }
+
+    /// Lookup current-frame rect if already submitted this frame.
+    pub fn currRectOf(self: *const Ui, name_id: Id) ?Rect {
+        var n: usize = 0;
+        while (n < self.curr_count) : (n += 1) {
+            if (self.curr_rects[n].id.eq(name_id)) return self.curr_rects[n].r;
         }
         return null;
     }
@@ -1099,5 +1128,241 @@ pub const Ui = struct {
         const sm = self.font.measure(s, size);
         self.drawText(mid.x + (mid.w - sm.w) * 0.5, mid.y + 5, size, self.theme.text, s);
         return changed;
+    }
+
+    /// Horizontal form row: fixed-width label column + remaining content width.
+    /// Opens a nested hstack; call `endFormRow` after the control.
+    pub fn beginFormRow(self: *Ui, opts: struct { label: []const u8, label_w: f32 = 90 }) void {
+        const row_h = self.theme.row_h + 4;
+        const full_w = self.top().width - 2 * self.top().pad;
+        // Reserve vertical space then open hstack for the row.
+        const r = self.alloc(full_w, row_h);
+        self.beginHStack(.{ .x = r.x, .y = r.y, .w = full_w, .h = row_h, .pad = 0, .gap = 8 });
+        const lm = self.font.measure(opts.label, self.theme.font_size);
+        // Label cell (not interactive).
+        const lr = self.alloc(opts.label_w, row_h);
+        self.drawText(lr.x, lr.y + (row_h - lm.h) * 0.5, self.theme.font_size, self.theme.text_dim, opts.label);
+    }
+
+    pub fn endFormRow(self: *Ui) void {
+        _ = self.endHStack();
+    }
+
+    /// Vertical splitter handle. Updates `width` while dragged (left pane width).
+    pub fn vSplitter(self: *Ui, opts: struct {
+        id: []const u8,
+        x: f32,
+        y: f32,
+        h: f32,
+        width: *f32,
+        min: f32 = 140,
+        max: f32 = 480,
+    }) void {
+        const i = self.id(opts.id);
+        const handle_w: f32 = 5;
+        const r = Rect{ .x = opts.x + opts.width.* - handle_w * 0.5, .y = opts.y, .w = handle_w, .h = opts.h };
+        self.remember(i, r);
+        const over = r.contains(self.input.mouse_x, self.input.mouse_y);
+        if (over) {
+            self.any_hot = true;
+            self.hot = i;
+            self.setTooltip("Drag to resize");
+        }
+        if (over and self.input.mousePressed(.left)) {
+            self.drag = i;
+            self.drag_anchor = self.input.mouse_x;
+            self.drag_value0 = opts.width.*;
+        }
+        if (self.drag.eq(i) and self.input.mouseDown(.left)) {
+            const dx = self.input.mouse_x - self.drag_anchor;
+            opts.width.* = std.math.clamp(self.drag_value0 + dx, opts.min, opts.max);
+        }
+        const fill: Color = if (self.drag.eq(i) or self.hot.eq(i)) self.theme.accent else self.theme.panel_border;
+        self.drawRect(r, fill);
+    }
+
+    /// Open a context menu at the cursor (typically on right-click).
+    pub fn openContextMenu(self: *Ui, owner: []const u8) void {
+        self.ctx_open = true;
+        self.ctx_x = self.input.mouse_x;
+        self.ctx_y = self.input.mouse_y;
+        self.ctx_owner = self.id(owner);
+    }
+
+    pub fn closeContextMenu(self: *Ui) void {
+        self.ctx_open = false;
+        self.ctx_owner = .{};
+    }
+
+    /// Draw/context-handle an open context menu. Returns clicked item index, or null.
+    pub fn contextMenu(self: *Ui, opts: struct {
+        owner: []const u8,
+        items: []const []const u8,
+    }) ?usize {
+        if (!self.ctx_open) return null;
+        if (!self.ctx_owner.eq(self.id(opts.owner))) return null;
+
+        if (self.input.keyPressed(.escape)) {
+            self.closeContextMenu();
+            self.consumed_escape = true;
+            return null;
+        }
+
+        const item_h = self.theme.row_h - 2;
+        const pad: f32 = 4;
+        var max_w: f32 = 80;
+        for (opts.items) |it| {
+            max_w = @max(max_w, self.font.measure(it, self.theme.font_size).w + 24);
+        }
+        const menu_h = item_h * @as(f32, @floatFromInt(opts.items.len)) + pad * 2;
+        var mx = self.ctx_x;
+        var my = self.ctx_y;
+        if (mx + max_w > self.width) mx = self.width - max_w - 4;
+        if (my + menu_h > self.height) my = self.height - menu_h - 4;
+
+        const menu = Rect{ .x = mx, .y = my, .w = max_w, .h = menu_h };
+        self.drawRectBorder(menu, self.theme.modal, self.theme.panel_border, 1);
+
+        var clicked: ?usize = null;
+        self.pushId(opts.owner);
+        defer self.popId();
+        for (opts.items, 0..) |item, idx| {
+            const ir = Rect{
+                .x = menu.x + pad,
+                .y = menu.y + pad + @as(f32, @floatFromInt(idx)) * item_h,
+                .w = max_w - pad * 2,
+                .h = item_h,
+            };
+            const iid = self.id(item);
+            const st = self.interact(iid, ir, false);
+            if (st.hot) self.drawRect(ir, self.theme.button_hot);
+            self.drawText(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
+            if (st.clicked) clicked = idx;
+        }
+
+        // Click outside closes.
+        if (self.input.mousePressed(.left) or self.input.mousePressed(.right)) {
+            if (!menu.contains(self.input.mouse_x, self.input.mouse_y)) {
+                self.closeContextMenu();
+            }
+        }
+        if (clicked != null) self.closeContextMenu();
+        return clicked;
+    }
+
+    /// Right-clickable region helper: if right-pressed over `r`, opens context menu.
+    pub fn rightClickOpen(self: *Ui, owner: []const u8, r: Rect) bool {
+        if (self.input.mousePressed(.right) and r.contains(self.input.mouse_x, self.input.mouse_y)) {
+            self.openContextMenu(owner);
+            return true;
+        }
+        return false;
+    }
+
+    /// Search/filter field (single-line text, no separate label).
+    pub fn searchField(self: *Ui, opts: struct {
+        id: []const u8,
+        buf: []u8,
+        len: *usize,
+        placeholder: []const u8 = "Search…",
+        w: f32 = 200,
+    }) bool {
+        const i = self.id(opts.id);
+        const r = self.alloc(opts.w, self.theme.row_h);
+        const st = self.interact(i, r, false);
+        if (st.clicked) self.focus = i;
+        const focused = self.focus.eq(i);
+        self.drawRectBorder(r, self.theme.input_bg, if (focused) self.theme.accent else self.theme.panel_border, 1);
+
+        var changed = false;
+        if (focused) {
+            if (self.input.text_len > 0) {
+                const avail = opts.buf.len - opts.len.*;
+                const n = @min(avail, self.input.text_len);
+                @memcpy(opts.buf[opts.len.* .. opts.len.* + n], self.input.text[0..n]);
+                opts.len.* += n;
+                changed = n > 0;
+            }
+            if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
+                opts.len.* -= 1;
+                changed = true;
+            }
+        }
+        if (opts.len.* == 0 and !focused) {
+            self.drawText(r.x + 6, r.y + 6, self.theme.font_size, self.theme.text_dim, opts.placeholder);
+        } else {
+            self.drawText(r.x + 6, r.y + 6, self.theme.font_size, self.theme.text, opts.buf[0..opts.len.*]);
+        }
+        return changed;
+    }
+
+    /// List box with optional keyboard navigation when hovered/selected.
+    pub fn listBoxNav(self: *Ui, opts: struct {
+        id: []const u8,
+        items: []const []const u8,
+        selected: *usize,
+        w: f32 = 200,
+        h: f32 = 160,
+    }) bool {
+        var changed = self.listBox(.{
+            .id = opts.id,
+            .items = opts.items,
+            .selected = opts.selected,
+            .w = opts.w,
+            .h = opts.h,
+        });
+        // Keyboard when list region is hot or has selection focus via hover.
+        const i = self.id(opts.id);
+        const r = self.prevRect(i) orelse return changed;
+        if (r.contains(self.input.mouse_x, self.input.mouse_y) or self.hot.eq(i)) {
+            if (opts.items.len > 0) {
+                if (self.input.keyPressed(.down)) {
+                    opts.selected.* = @min(opts.selected.* + 1, opts.items.len - 1);
+                    changed = true;
+                }
+                if (self.input.keyPressed(.up)) {
+                    if (opts.selected.* > 0) opts.selected.* -= 1;
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    /// Simple selectable tree node (indent + expand arrow + label).
+    pub fn treeNode(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        open: ?*bool = null,
+        selected: bool = false,
+        depth: u32 = 0,
+    }) struct { clicked: bool, toggled: bool } {
+        const i = self.id(opts.id);
+        const indent: f32 = @as(f32, @floatFromInt(opts.depth)) * 14;
+        const r = self.alloc(0, self.theme.row_h - 2);
+        const full = Rect{
+            .x = r.x,
+            .y = r.y,
+            .w = self.top().width - 2 * self.top().pad,
+            .h = self.theme.row_h - 2,
+        };
+        const st = self.interact(i, full, false);
+        if (st.hot or opts.selected) {
+            self.drawRect(full, if (opts.selected) self.theme.selected else self.theme.button_hot);
+        }
+        var toggled = false;
+        var x = full.x + 4 + indent;
+        if (opts.open) |op| {
+            const arrow: []const u8 = if (op.*) "v" else ">";
+            self.drawText(x, full.y + 5, self.theme.font_size, self.theme.accent, arrow);
+            if (st.clicked and self.input.mouse_x < x + 18) {
+                op.* = !op.*;
+                toggled = true;
+            }
+            x += 16;
+        }
+        self.drawText(x, full.y + 5, self.theme.font_size, self.theme.text, opts.label);
+        const clicked = st.clicked and !toggled;
+        return .{ .clicked = clicked, .toggled = toggled };
     }
 };

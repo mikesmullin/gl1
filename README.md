@@ -30,7 +30,7 @@ zig build
 | `widgets_basic` | Label, button, slider, text field, … |
 | `panels` | `beginPanel` / `endPanel` |
 | `layout` | vstack / hstack |
-| `inspector` | Menubar + entity list + form + modal (composite) |
+| `inspector` | Menubar, resizable split, tree, filter, context menu, form, modals |
 
 **Keys**
 
