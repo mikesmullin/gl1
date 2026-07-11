@@ -267,6 +267,29 @@ fn clearSelection(st: *state.State) void {
     st.canvas_sel_primary = -1;
 }
 
+fn selectAll(st: *state.State) void {
+    var mask: u32 = 0;
+    var i: usize = 0;
+    while (i < ents.len) : (i += 1) mask |= @as(u32, 1) << @intCast(i);
+    st.canvas_sel_mask = mask;
+    st.canvas_sel_primary = if (ents.len > 0) 0 else -1;
+}
+
+/// A: toggle select-all / select-none (Blender-ish).
+fn toggleSelectAll(st: *state.State) void {
+    const all_mask: u32 = blk: {
+        var m: u32 = 0;
+        var i: usize = 0;
+        while (i < ents.len) : (i += 1) m |= @as(u32, 1) << @intCast(i);
+        break :blk m;
+    };
+    if (st.canvas_sel_mask == all_mask) {
+        clearSelection(st);
+    } else {
+        selectAll(st);
+    }
+}
+
 const Cam = struct {
     eye: Vec3,
     target: Vec3,
@@ -685,10 +708,12 @@ pub fn frame(a: *app.App) void {
         const speed = if (a.input.shift) base_speed * 2.5 else base_speed;
         const step = speed * a.dt;
         var move = Vec3{};
+        // A = select-all toggle on press; only strafe-left while held after that frame.
+        if (a.input.keyPressed(.a)) toggleSelectAll(st);
         if (a.input.keyDown(.w)) move = Vec3.add(move, cam.forward);
         if (a.input.keyDown(.s)) move = Vec3.sub(move, cam.forward);
         if (a.input.keyDown(.d)) move = Vec3.add(move, cam.right);
-        if (a.input.keyDown(.a)) move = Vec3.sub(move, cam.right);
+        if (a.input.keyDown(.a) and !a.input.keyPressed(.a)) move = Vec3.sub(move, cam.right);
         // Vertical: world up so flying feels level (not camera-tilt dependent).
         // Space = up unless Space+LMB pan is active.
         if (a.input.keyDown(.e) or (a.input.keyDown(.space) and !a.input.mouseDown(.left)))
@@ -796,7 +821,7 @@ pub fn frame(a: *app.App) void {
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
     u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB drag orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  F / Numpad . frame sel  ·  7/1/3 views  ·  Ctrl/Shift multi");
+    u.drawText(16, 58, 1.5, u.theme.text_dim, "A select all/none  ·  WASD+QE fly  ·  F/. frame  ·  7/1/3  ·  Ctrl/Shift multi");
 
     var buf: [96]u8 = undefined;
     const nsel = @popCount(st.canvas_sel_mask);
