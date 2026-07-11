@@ -9,6 +9,7 @@ const std = @import("std");
 const app = @import("../app.zig");
 const ui = @import("../ui/ui.zig");
 const state = @import("state.zig");
+const anim = @import("../anim.zig");
 const sgl = @import("sokol").gl;
 
 const Vec3 = struct {
@@ -566,16 +567,17 @@ pub fn frame(a: *app.App) void {
         st.canvas_pitch = 0;
     }
 
-    // Dolly (wheel) — cancel frame tween if user zooms
+    // Dolly (wheel) — cancel frame anim if user zooms
     const dy = u.wheelY();
     if (dy != 0) {
         const factor: f32 = if (dy > 0) 0.9 else 1.0 / 0.9;
         st.canvas_dist = std.math.clamp(st.canvas_dist * factor, 80, 2500);
-        st.canvas_tween_t = -1;
+        st.canvas_frame.cancel();
         u.eatScroll();
     }
 
-    // Numpad `.` / period: frame selection (center + zoom to ~80% viewport), 250ms ease.
+    // Numpad `.` / period: frame selection (center + zoom ~80% viewport).
+    // Driven by Game9-inspired Timer + parallel Tweens (250ms, smoothstep).
     if (a.input.keyPressed(.period) and st.canvas_sel_mask != 0 and u.focus.isNone()) {
         var bmin = Vec3{ .x = 1e9, .y = 1e9, .z = 1e9 };
         var bmax = Vec3{ .x = -1e9, .y = -1e9, .z = -1e9 };
@@ -597,13 +599,10 @@ pub fn frame(a: *app.App) void {
                 .z = (bmin.z + bmax.z) * 0.5,
             };
             const ext = Vec3.sub(bmax, bmin);
-            // Bounding sphere radius from AABB half-diagonal.
             const radius = 0.5 * @sqrt(ext.x * ext.x + ext.y * ext.y + ext.z * ext.z);
             const fov = 50.0 * std.math.pi / 180.0;
-            // Fit sphere to ~80% of vertical FOV: R / d = tan(0.4 * fov_y).
             const half_fit = 0.4 * fov;
             var dist = radius / @tan(half_fit);
-            // Also respect horizontal FOV on wide screens.
             const aspect = w / @max(h, 1);
             if (aspect > 1) {
                 const half_h_fit = std.math.atan(@tan(half_fit) * aspect);
@@ -611,34 +610,28 @@ pub fn frame(a: *app.App) void {
             }
             dist = std.math.clamp(dist, 80, 2500);
 
-            st.canvas_tween_from_tx = st.canvas_tx;
-            st.canvas_tween_from_ty = st.canvas_ty;
-            st.canvas_tween_from_tz = st.canvas_tz;
-            st.canvas_tween_from_dist = st.canvas_dist;
-            st.canvas_tween_to_tx = center.x;
-            st.canvas_tween_to_ty = center.y;
-            st.canvas_tween_to_tz = center.z;
-            st.canvas_tween_to_dist = dist;
-            st.canvas_tween_t = 0;
+            st.canvas_frame.reset();
+            st.canvas_frame.add(st.canvas_tx, center.x);
+            st.canvas_frame.add(st.canvas_ty, center.y);
+            st.canvas_frame.add(st.canvas_tz, center.z);
+            st.canvas_frame.add(st.canvas_dist, dist);
+            st.canvas_frame.play(a.time, 0.25);
         }
     }
 
-    // Advance frame tween (smoothstep ease).
-    if (st.canvas_tween_t >= 0) {
-        const dur: f32 = 0.25;
-        st.canvas_tween_t = @min(1, st.canvas_tween_t + a.dt / dur);
-        const t = st.canvas_tween_t;
-        const s = t * t * (3 - 2 * t); // smoothstep
-        st.canvas_tx = st.canvas_tween_from_tx + (st.canvas_tween_to_tx - st.canvas_tween_from_tx) * s;
-        st.canvas_ty = st.canvas_tween_from_ty + (st.canvas_tween_to_ty - st.canvas_tween_from_ty) * s;
-        st.canvas_tz = st.canvas_tween_from_tz + (st.canvas_tween_to_tz - st.canvas_tween_from_tz) * s;
-        st.canvas_dist = st.canvas_tween_from_dist + (st.canvas_tween_to_dist - st.canvas_tween_from_dist) * s;
-        if (st.canvas_tween_t >= 1) st.canvas_tween_t = -1;
+    // Sample parallel tweens into camera (Game9 pull-style evaluation).
+    if (st.canvas_frame.timer.playing()) {
+        var outs: [4]f32 = undefined;
+        _ = st.canvas_frame.tickInto(a.time, outs[0..]);
+        st.canvas_tx = outs[0];
+        st.canvas_ty = outs[1];
+        st.canvas_tz = outs[2];
+        st.canvas_dist = outs[3];
     }
 
     // Middle mouse: orbit, or Shift+MMB strafe (pan in camera plane).
     if (a.input.mousePressed(.middle)) {
-        st.canvas_tween_t = -1; // user takes over
+        st.canvas_frame.cancel(); // user takes over
         if (a.input.shift) {
             st.canvas_strafing = true;
             st.canvas_orbiting = false;
@@ -687,7 +680,7 @@ pub fn frame(a: *app.App) void {
         st.canvas_tx += r.x + uu.x;
         st.canvas_ty += r.y + uu.y;
         st.canvas_tz += r.z + uu.z;
-        st.canvas_tween_t = -1;
+        st.canvas_frame.cancel();
         cam = buildCam(st);
     }
 

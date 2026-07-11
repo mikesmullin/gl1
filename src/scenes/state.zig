@@ -90,16 +90,9 @@ pub const State = struct {
     /// Multi-select bit mask (bit i = entity i selected). Primary = last clicked.
     canvas_sel_mask: u32 = 0,
     canvas_sel_primary: i32 = -1,
-    /// Camera frame tween (numpad `.`): -1 idle, else 0..1 progress over ~250ms.
-    canvas_tween_t: f32 = -1,
-    canvas_tween_from_tx: f32 = 0,
-    canvas_tween_from_ty: f32 = 0,
-    canvas_tween_from_tz: f32 = 0,
-    canvas_tween_from_dist: f32 = 0,
-    canvas_tween_to_tx: f32 = 0,
-    canvas_tween_to_ty: f32 = 0,
-    canvas_tween_to_tz: f32 = 0,
-    canvas_tween_to_dist: f32 = 0,
+    /// Frame-selected camera anim (numpad `.`) — Game9-style Timer + parallel Tweens.
+    /// Channels: 0=tx, 1=ty, 2=tz, 3=dist.
+    canvas_frame: @import("../anim.zig").Parallel = .{},
 
     pub fn init(self: *State) void {
         const hello = "hello gl1";
