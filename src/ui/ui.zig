@@ -432,15 +432,37 @@ pub const Ui = struct {
     pub fn beginHStack(self: *Ui, opts: struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0, pad: ?f32 = null, gap: ?f32 = null }) void {
         const pad = opts.pad orelse self.theme.pad;
         const gap = opts.gap orelse self.theme.gap;
+        const parent = self.top();
+        var x = opts.x;
+        var y = opts.y;
+        var w = opts.w;
+        var h = opts.h;
+        // Nest into parent layout when no explicit box was provided (same convention as beginVStack).
+        if (w == 0 and h == 0 and parent.kind != .free) {
+            if (parent.kind == .vstack) {
+                x = parent.origin_x + parent.pad;
+                y = parent.cursor_y;
+                w = parent.width - 2 * parent.pad;
+                h = self.theme.row_h + 2 * pad;
+            } else if (parent.kind == .hstack) {
+                x = parent.cursor_x;
+                y = parent.origin_y + parent.pad;
+                w = parent.width;
+                h = parent.height - 2 * parent.pad;
+            }
+        } else {
+            if (h == 0) h = self.theme.row_h + 2 * pad;
+            if (w == 0) w = self.width - x;
+        }
         if (self.layout_depth < MaxLayout) {
             self.layout_stack[self.layout_depth] = .{
                 .kind = .hstack,
-                .cursor_x = opts.x + pad,
-                .cursor_y = opts.y + pad,
-                .origin_x = opts.x,
-                .origin_y = opts.y,
-                .width = if (opts.w > 0) opts.w else self.width - opts.x,
-                .height = if (opts.h > 0) opts.h else self.theme.row_h + 2 * pad,
+                .cursor_x = x + pad,
+                .cursor_y = y + pad,
+                .origin_x = x,
+                .origin_y = y,
+                .width = w,
+                .height = h,
                 .pad = pad,
                 .gap = gap,
             };
@@ -456,7 +478,10 @@ pub const Ui = struct {
         const r = Rect{ .x = L.origin_x, .y = L.origin_y, .w = @max(0, used_w), .h = L.height };
         const p = self.top();
         if (p.kind == .vstack) {
-            p.cursor_y = r.y + r.h + p.gap;
+            // Advance parent past this row (do not jump to absolute r.y if parent already moved).
+            p.cursor_y = @max(p.cursor_y, r.y + r.h) + p.gap;
+        } else if (p.kind == .hstack) {
+            p.cursor_x = @max(p.cursor_x, r.x + r.w) + p.gap;
         }
         return r;
     }

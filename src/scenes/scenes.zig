@@ -288,9 +288,8 @@ fn frameInspector(a: *app.App) void {
         if (u.beginCollapsible(.{ .id = "col_mat", .title = "Material", .open = &st.collab_b })) {
             defer u.endCollapsible(true);
             u.label(.{ .text = "Tint swatches" });
-            u.beginHStack(.{ .x = 256, .y = 0, .w = 300, .h = 36, .pad = 0, .gap = 6 });
-            // Absolute-ish: use alloc path via buttons in free layout of collapsible vstack
-            _ = u.endHStack();
+            // Nested hstack: sits in the collapsible vstack, swatches flow left→right.
+            u.beginHStack(.{ .pad = 0, .gap = 6 });
             const swatches = [_]ui.Color{
                 .{ 1, 1, 1, 1 },
                 .{ 0.9, 0.3, 0.3, 1 },
@@ -305,6 +304,7 @@ fn frameInspector(a: *app.App) void {
                     st.color_idx = idx;
                 }
             }
+            _ = u.endHStack();
         } else {
             u.endCollapsible(false);
         }
