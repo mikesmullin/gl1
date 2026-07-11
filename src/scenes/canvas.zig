@@ -698,22 +698,26 @@ pub fn frame(a: *app.App) void {
         cam = buildCam(st);
     }
 
+    // Ctrl+A: toggle select all / none (A alone stays fly strafe-left).
+    if (u.focus.isNone() and !u.palette_open and a.input.ctrl and a.input.keyPressed(.a)) {
+        toggleSelectAll(st);
+    }
+
     // --- Fly navigation (Unity / Blender Walk-Fly style) ---
     // WASD = forward / left / back / right along view
     // Q = down, E / Space = up  (world Y)
     // Shift = faster
     // Skip when a text field has focus so typing isn't stolen.
-    if (u.focus.isNone() and !u.palette_open) {
+    // Skip fly when Ctrl is held so Ctrl+A doesn't also strafe.
+    if (u.focus.isNone() and !u.palette_open and !a.input.ctrl) {
         const base_speed: f32 = 180.0;
         const speed = if (a.input.shift) base_speed * 2.5 else base_speed;
         const step = speed * a.dt;
         var move = Vec3{};
-        // A = select-all toggle on press; only strafe-left while held after that frame.
-        if (a.input.keyPressed(.a)) toggleSelectAll(st);
         if (a.input.keyDown(.w)) move = Vec3.add(move, cam.forward);
         if (a.input.keyDown(.s)) move = Vec3.sub(move, cam.forward);
         if (a.input.keyDown(.d)) move = Vec3.add(move, cam.right);
-        if (a.input.keyDown(.a) and !a.input.keyPressed(.a)) move = Vec3.sub(move, cam.right);
+        if (a.input.keyDown(.a)) move = Vec3.sub(move, cam.right);
         // Vertical: world up so flying feels level (not camera-tilt dependent).
         // Space = up unless Space+LMB pan is active.
         if (a.input.keyDown(.e) or (a.input.keyDown(.space) and !a.input.mouseDown(.left)))
@@ -821,7 +825,7 @@ pub fn frame(a: *app.App) void {
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
     u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB drag orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "A select all/none  ·  WASD+QE fly  ·  F/. frame  ·  7/1/3  ·  Ctrl/Shift multi");
+    u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  Ctrl+A all/none  ·  F/. frame  ·  7/1/3  ·  Ctrl/Shift multi");
 
     var buf: [96]u8 = undefined;
     const nsel = @popCount(st.canvas_sel_mask);
