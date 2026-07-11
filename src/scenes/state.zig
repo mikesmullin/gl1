@@ -75,9 +75,9 @@ pub const State = struct {
     canvas_tx: f32 = 0,
     canvas_ty: f32 = 0,
     canvas_tz: f32 = 0,
-    /// Orbit angles (radians). Default ≈ top view (pitch nearly -π/2).
-    canvas_yaw: f32 = 0,
-    canvas_pitch: f32 = -1.45,
+    /// Orbit angles (radians). Default = slight 3/4 view (Y-up, green axis upright).
+    canvas_yaw: f32 = 0.6,
+    canvas_pitch: f32 = -0.55,
     /// Distance from target.
     canvas_dist: f32 = 420,
     /// Legacy 2D pan/zoom kept for any old refs; canvas uses 3D camera now.

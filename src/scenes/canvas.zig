@@ -113,21 +113,24 @@ fn buildCam(st: *const state.State) Cam {
     };
 }
 
+/// Project world → screen. Must match sgl lookat + perspective (OpenGL-style,
+/// Y-up NDC, FOV in radians). Screen origin is top-left (UI convention).
 fn project(p: Vec3, cam: Cam, w: f32, h: f32) ?struct { x: f32, y: f32, z: f32 } {
     const rel = Vec3.sub(p, cam.eye);
-    const cx = Vec3.dot(rel, cam.right);
-    const cy = Vec3.dot(rel, cam.up);
-    // Camera looks along +forward; depth positive in front
-    const cz = Vec3.dot(rel, cam.forward);
-    if (cz < 1.0) return null;
+    // Eye-space matching sgl/glu lookat: X=side, Y=up, Z=−forward
+    const ex = Vec3.dot(rel, cam.right);
+    const ey = Vec3.dot(rel, cam.up);
+    const ez = -Vec3.dot(rel, cam.forward); // negative in front
+    if (ez >= -1.0) return null; // behind / too near
     const f = 1.0 / @tan(cam.fov_y * 0.5);
     const aspect = w / @max(h, 1);
-    const ndc_x = (cx / cz) * f / aspect;
-    const ndc_y = (cy / cz) * f;
+    // Perspective divide by −ez (positive depth in front)
+    const ndc_x = (ex * f / aspect) / (-ez);
+    const ndc_y = (ey * f) / (-ez);
     return .{
         .x = (ndc_x + 1) * 0.5 * w,
-        .y = (1 - ndc_y) * 0.5 * h,
-        .z = cz,
+        .y = (1 - ndc_y) * 0.5 * h, // NDC +Y → screen top
+        .z = -ez,
     };
 }
 
@@ -293,35 +296,61 @@ fn drawGrid(extent: f32, step: f32) void {
     sgl.end();
 }
 
-fn pickEntity(mx: f32, my: f32, cam: Cam, w: f32, h: f32) i32 {
-    var best: i32 = -1;
-    var best_z: f32 = 1e9;
-    for (ents, 0..) |e, i| {
-        var min_x: f32 = 1e9;
-        var min_y: f32 = 1e9;
-        var max_x: f32 = -1e9;
-        var max_y: f32 = -1e9;
-        var any = false;
-        var avg_z: f32 = 0;
-        var n: f32 = 0;
-        for (cubeCorners(e)) |c| {
-            if (project(c, cam, w, h)) |s| {
-                any = true;
-                min_x = @min(min_x, s.x);
-                min_y = @min(min_y, s.y);
-                max_x = @max(max_x, s.x);
-                max_y = @max(max_y, s.y);
-                avg_z += s.z;
-                n += 1;
-            }
+/// Ray vs axis-aligned box; returns distance along ray or null.
+fn rayAabb(orig: Vec3, dir: Vec3, bmin: Vec3, bmax: Vec3) ?f32 {
+    var tmin: f32 = 0;
+    var tmax: f32 = 1e9;
+    const dims = [_]struct { o: f32, d: f32, mn: f32, mx: f32 }{
+        .{ .o = orig.x, .d = dir.x, .mn = bmin.x, .mx = bmax.x },
+        .{ .o = orig.y, .d = dir.y, .mn = bmin.y, .mx = bmax.y },
+        .{ .o = orig.z, .d = dir.z, .mn = bmin.z, .mx = bmax.z },
+    };
+    for (dims) |a| {
+        if (@abs(a.d) < 1e-8) {
+            if (a.o < a.mn or a.o > a.mx) return null;
+            continue;
         }
-        if (!any) continue;
-        // Pad pick region a little
-        const pad: f32 = 4;
-        if (mx >= min_x - pad and mx <= max_x + pad and my >= min_y - pad and my <= max_y + pad) {
-            const z = avg_z / n;
-            if (z < best_z) {
-                best_z = z;
+        var t0 = (a.mn - a.o) / a.d;
+        var t1 = (a.mx - a.o) / a.d;
+        if (t0 > t1) {
+            const tmp = t0;
+            t0 = t1;
+            t1 = tmp;
+        }
+        tmin = @max(tmin, t0);
+        tmax = @min(tmax, t1);
+        if (tmax < tmin) return null;
+    }
+    if (tmin >= 0) return tmin;
+    if (tmax >= 0) return tmax;
+    return null;
+}
+
+/// Pick only the solid cube (mesh AABB) — labels are not clickable.
+fn pickEntity(mx: f32, my: f32, cam: Cam, w: f32, h: f32) i32 {
+    // Screen → NDC (top-left UI → OpenGL Y-up NDC)
+    const ndc_x = (2.0 * mx / w) - 1.0;
+    const ndc_y = 1.0 - (2.0 * my / h);
+    const t = @tan(cam.fov_y * 0.5);
+    const aspect = w / @max(h, 1);
+    // Eye-space ray (GL: looks down −Z), then to world via camera basis.
+    const dir = Vec3.norm(Vec3.add(
+        Vec3.add(
+            Vec3.scale(cam.right, ndc_x * aspect * t),
+            Vec3.scale(cam.up, ndc_y * t),
+        ),
+        cam.forward,
+    ));
+    const orig = cam.eye;
+
+    var best: i32 = -1;
+    var best_t: f32 = 1e9;
+    for (ents, 0..) |e, i| {
+        const bmin = Vec3{ .x = e.pos.x - e.half, .y = e.pos.y - e.half, .z = e.pos.z - e.half };
+        const bmax = Vec3{ .x = e.pos.x + e.half, .y = e.pos.y + e.half, .z = e.pos.z + e.half };
+        if (rayAabb(orig, dir, bmin, bmax)) |hit_t| {
+            if (hit_t < best_t) {
+                best_t = hit_t;
                 best = @intCast(i);
             }
         }
@@ -408,11 +437,13 @@ pub fn frame(a: *app.App) void {
     sgl.matrixModeProjection();
     sgl.loadIdentity();
     const aspect = w / @max(h, 1);
-    sgl.perspective(cam.fov_y * 180.0 / std.math.pi, aspect, 1.0, 8000.0);
+    // sgl_perspective takes FOV in *radians* (sin(fovy/2) with no deg conversion).
+    // Passing degrees made the GPU frustum disagree with project() → labels floated
+    // free of their cubes and the view felt orientation-broken / “gimbal locked”.
+    sgl.perspective(cam.fov_y, aspect, 1.0, 8000.0);
     sgl.matrixModeModelview();
     sgl.loadIdentity();
-    // Always pass world up into lookat (turntable) — matches buildCam and
-    // prevents the view from rolling so the green +Y axis points “down”.
+    // Turntable: fixed world up so +Y stays upright on screen (never rolls inverted).
     sgl.lookat(
         cam.eye.x,
         cam.eye.y,
@@ -440,13 +471,15 @@ pub fn frame(a: *app.App) void {
     sgl.loadIdentity();
     if (a.pip_alpha.id != 0) sgl.loadPipeline(a.pip_alpha);
 
-    // Projected labels
+    // Labels track each cube’s transform: just above the top face, centered.
+    // (Not clickable — picking is mesh-only via ray/AABB.)
     for (ents, 0..) |e, i| {
-        const top = Vec3.add(e.pos, .{ .x = 0, .y = e.half + 4, .z = 0 });
-        if (project(top, cam, w, h)) |s| {
+        const anchor = Vec3.add(e.pos, .{ .x = 0, .y = e.half + 6, .z = 0 });
+        if (project(anchor, cam, w, h)) |s| {
             const sel = st.canvas_sel == @as(i32, @intCast(i));
             const col = if (sel) u.theme.accent else u.theme.text;
-            u.drawText(s.x - 20, s.y - 4, 1.5, col, e.name);
+            const tw = u.font.measure(e.name, 1.5).w;
+            u.drawText(s.x - tw * 0.5, s.y - 10, 1.5, col, e.name);
         }
     }
 
