@@ -209,13 +209,36 @@ const Entity = struct {
 };
 
 /// Demo world: each cube is a stand-in for an ECS entity.
+/// (No “Origin” mesh — world origin is implied by the compass + grid.)
 const ents = [_]Entity{
-    .{ .pos = .{ .x = 0, .y = 14, .z = 0 }, .half = 14, .color = .{ 0.9, 0.3, 0.3, 1 }, .name = "Origin" },
     .{ .pos = .{ .x = 120, .y = 14, .z = -40 }, .half = 16, .color = .{ 0.3, 0.85, 0.4, 1 }, .name = "Hero" },
     .{ .pos = .{ .x = -80, .y = 18, .z = 90 }, .half = 18, .color = .{ 0.3, 0.5, 0.95, 1 }, .name = "Slime" },
     .{ .pos = .{ .x = 200, .y = 12, .z = 140 }, .half = 12, .color = .{ 0.95, 0.8, 0.2, 1 }, .name = "Torch" },
     .{ .pos = .{ .x = -160, .y = 22, .z = -100 }, .half = 20, .color = .{ 0.75, 0.4, 0.9, 1 }, .name = "Crystal" },
+    .{ .pos = .{ .x = 40, .y = 16, .z = 60 }, .half = 14, .color = .{ 0.9, 0.55, 0.2, 1 }, .name = "Crate" },
 };
+
+fn isSelected(st: *const state.State, i: usize) bool {
+    return (st.canvas_sel_mask & (@as(u32, 1) << @intCast(i))) != 0;
+}
+
+fn setSelected(st: *state.State, i: usize, on: bool) void {
+    const bit = @as(u32, 1) << @intCast(i);
+    if (on) st.canvas_sel_mask |= bit else st.canvas_sel_mask &= ~bit;
+}
+
+fn clearSelection(st: *state.State) void {
+    st.canvas_sel_mask = 0;
+    st.canvas_sel_primary = -1;
+}
+
+fn orbitPivot(st: *const state.State) Vec3 {
+    if (st.canvas_sel_primary >= 0 and st.canvas_sel_primary < ents.len) {
+        return ents[@intCast(st.canvas_sel_primary)].pos;
+    }
+    // No selection: keep current look target (screen-center focus).
+    return .{ .x = st.canvas_tx, .y = st.canvas_ty, .z = st.canvas_tz };
+}
 
 const Cam = struct {
     eye: Vec3,
@@ -393,7 +416,7 @@ fn drawCube(e: Entity, selected: bool, accent: ui.Color) void {
 
 fn drawGrid(extent: f32, step: f32) void {
     sgl.beginLines();
-    // Grid on XZ ground plane (Y=0)
+    // Grid on XZ ground plane (Y=0) — no world-origin gizmo (compass is corner HUD).
     sgl.c4f(0.22, 0.24, 0.28, 1);
     var x: f32 = -extent;
     while (x <= extent + 0.1) : (x += step) {
@@ -405,17 +428,38 @@ fn drawGrid(extent: f32, step: f32) void {
         sgl.v3f(-extent, 0, z);
         sgl.v3f(extent, 0, z);
     }
-    // Axes
-    sgl.c4f(0.75, 0.25, 0.25, 1);
-    sgl.v3f(0, 0.05, 0);
-    sgl.v3f(extent * 0.5, 0.05, 0);
-    sgl.c4f(0.25, 0.7, 0.35, 1);
-    sgl.v3f(0, 0, 0);
-    sgl.v3f(0, extent * 0.35, 0);
-    sgl.c4f(0.3, 0.45, 0.9, 1);
-    sgl.v3f(0, 0.05, 0);
-    sgl.v3f(0, 0.05, extent * 0.5);
     sgl.end();
+}
+
+/// Always-on orientation compass (top-right): how world +X/+Y/+Z project on screen.
+fn drawCompass(u: anytype, cam: Cam, screen_w: f32) void {
+    const ox = screen_w - 56;
+    const oy: f32 = 56;
+    const len: f32 = 36;
+    const axes = [_]struct { v: Vec3, c: ui.Color, label: []const u8 }{
+        .{ .v = .{ .x = 1, .y = 0, .z = 0 }, .c = .{ 0.9, 0.3, 0.3, 1 }, .label = "X" },
+        .{ .v = .{ .x = 0, .y = 1, .z = 0 }, .c = .{ 0.3, 0.85, 0.4, 1 }, .label = "Y" },
+        .{ .v = .{ .x = 0, .y = 0, .z = 1 }, .c = .{ 0.35, 0.55, 0.95, 1 }, .label = "Z" },
+    };
+    // Dim disc behind
+    u.drawRect(.{ .x = ox - 42, .y = oy - 42, .w = 84, .h = 84 }, .{ 0.08, 0.09, 0.11, 0.65 });
+    for (axes) |ax| {
+        // Project world axis onto camera right/up (view plane).
+        const sx = Vec3.dot(ax.v, cam.right) * len;
+        const sy = -Vec3.dot(ax.v, cam.up) * len; // screen Y down
+        const x1 = ox + sx;
+        const y1 = oy + sy;
+        // Thick-ish line via rect segments
+        const steps: i32 = 12;
+        var s: i32 = 0;
+        while (s <= steps) : (s += 1) {
+            const t = @as(f32, @floatFromInt(s)) / @as(f32, @floatFromInt(steps));
+            const px = ox + sx * t;
+            const py = oy + sy * t;
+            u.drawRect(.{ .x = px - 1.5, .y = py - 1.5, .w = 3, .h = 3 }, ax.c);
+        }
+        u.drawText(x1 + 4, y1 - 6, 1.5, ax.c, ax.label);
+    }
 }
 
 /// Ray vs axis-aligned box; returns distance along ray or null.
@@ -496,17 +540,26 @@ pub fn frame(a: *app.App) void {
         u.eatScroll();
     }
 
-    // Orbit — middle mouse drag (turntable).
-    // Natural “grab the view”: drag right → orbit right; drag up → tilt up
-    // (previous signs felt inverted). Pitch is clamped just inside ±90° so we
-    // never hit true gimbal lock; yaw is free → full 360° around world Y.
-    if (a.input.mousePressed(.middle)) st.canvas_orbiting = true;
+    // Orbit pivot: selected entity (primary), else current look-target (= screen center focus).
+    if (a.input.mousePressed(.middle)) {
+        st.canvas_orbiting = true;
+        const pivot = orbitPivot(st);
+        st.canvas_tx = pivot.x;
+        st.canvas_ty = pivot.y;
+        st.canvas_tz = pivot.z;
+    }
     if (a.input.mouseReleased(.middle)) st.canvas_orbiting = false;
     if (st.canvas_orbiting and a.input.mouseDown(.middle)) {
+        // Keep orbiting the selection if it is still the primary.
+        if (st.canvas_sel_primary >= 0) {
+            const pivot = orbitPivot(st);
+            st.canvas_tx = pivot.x;
+            st.canvas_ty = pivot.y;
+            st.canvas_tz = pivot.z;
+        }
         const sens: f32 = 0.005;
         st.canvas_yaw -= a.input.mouse_dx * sens;
         st.canvas_pitch += a.input.mouse_dy * sens;
-        // Keep a tiny margin from ±π/2 so world-up lookat stays stable.
         const lim: f32 = std.math.pi * 0.5 - 0.02;
         st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
     }
@@ -518,7 +571,6 @@ pub fn frame(a: *app.App) void {
 
     var cam = buildCam(st);
     if (st.canvas_panning) {
-        // Screen drag → world along camera right / up
         const k = st.canvas_dist * 0.0022;
         const r = Vec3.scale(cam.right, -a.input.mouse_dx * k);
         const uu = Vec3.scale(cam.up, a.input.mouse_dy * k);
@@ -531,18 +583,41 @@ pub fn frame(a: *app.App) void {
     const aspect = w / @max(h, 1);
     const znear: f32 = 1.0;
     const zfar: f32 = 8000.0;
-    // Same P·V the GPU uses (Game9 keeps these on Camera for pick/project).
     const mat_p = matPerspective(cam.fov_y, aspect, znear, zfar);
     const mat_v = matLookAt(cam.eye, cam.target, .{ .x = 0, .y = 1, .z = 0 });
     const pv = Mat4.mul(mat_p, mat_v);
     const inv_pv = Mat4.inverse(pv);
 
-    // Select — LMB click (not pan). Ray from Game9-style unproject; hit = cube AABB only.
+    // Select — LMB on mesh only. Ctrl/Shift = multi-select toggle; plain click replaces.
     if (a.input.mousePressed(.left) and !a.input.keyDown(.space) and !u.palette_open) {
         const ray = screenToWorldRay(a.input.mouse_x, a.input.mouse_y, w, h, cam.eye, inv_pv);
         const hit = pickEntity(ray);
-        st.canvas_sel = hit;
-        if (hit >= 0) u.log("canvas select");
+        const multi = a.input.ctrl or a.input.shift;
+        if (hit < 0) {
+            if (!multi) clearSelection(st);
+        } else {
+            const iu: usize = @intCast(hit);
+            if (multi) {
+                const on = !isSelected(st, iu);
+                setSelected(st, iu, on);
+                if (on) st.canvas_sel_primary = hit else if (st.canvas_sel_primary == hit) {
+                    // Primary deselected — fall back to any remaining bit.
+                    st.canvas_sel_primary = -1;
+                    var bi: usize = 0;
+                    while (bi < ents.len) : (bi += 1) {
+                        if (isSelected(st, bi)) {
+                            st.canvas_sel_primary = @intCast(bi);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                clearSelection(st);
+                setSelected(st, iu, true);
+                st.canvas_sel_primary = hit;
+            }
+            u.log("canvas select");
+        }
     }
 
     // --- 3D pass (sgl builds the same perspective/lookat we use for rays) ---
@@ -568,8 +643,7 @@ pub fn frame(a: *app.App) void {
     drawGrid(400, 40);
 
     for (ents, 0..) |e, i| {
-        const sel = st.canvas_sel == @as(i32, @intCast(i));
-        drawCube(e, sel, u.theme.accent);
+        drawCube(e, isSelected(st, i), u.theme.accent);
     }
 
     // --- Restore 2D for UI overlay text ---
@@ -580,29 +654,32 @@ pub fn frame(a: *app.App) void {
     sgl.loadIdentity();
     if (a.pip_alpha.id != 0) sgl.loadPipeline(a.pip_alpha);
 
-    // Labels: Game9 GetWorldToScreen through the same P·V as the mesh.
-    // Anchor = cube origin (center), slightly above top face — entity transform is authority.
+    // Labels track cube tops (not clickable).
     for (ents, 0..) |e, i| {
         const anchor = Vec3.add(e.pos, .{ .x = 0, .y = e.half + 6, .z = 0 });
         if (worldToScreen(anchor, w, h, pv)) |s| {
-            const sel = st.canvas_sel == @as(i32, @intCast(i));
+            const sel = isSelected(st, i);
             const col = if (sel) u.theme.accent else u.theme.text;
             const tw = u.font.measure(e.name, 1.5).w;
             u.drawText(s.x - tw * 0.5, s.y - 10, 1.5, col, e.name);
         }
     }
 
+    drawCompass(u, cam, w);
+
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
-    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit  |  Space+LMB pan  |  wheel dolly  |  LMB select");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "Numpad/keys 7 top  ·  1 front  ·  3 right  (Blender)");
+    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit (sel / center)  |  Space+LMB pan  |  wheel dolly");
+    u.drawText(16, 58, 1.5, u.theme.text_dim, "LMB select  ·  Ctrl/Shift+LMB multi  ·  7/1/3 views");
 
     var buf: [96]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "yaw {d:.2}  pitch {d:.2}  dist {d:.0}  sel {d}", .{
+    const nsel = @popCount(st.canvas_sel_mask);
+    const msg = std.fmt.bufPrint(&buf, "yaw {d:.2}  pitch {d:.2}  dist {d:.0}  sel {d} (primary {d})", .{
         st.canvas_yaw,
         st.canvas_pitch,
         st.canvas_dist,
-        st.canvas_sel,
+        nsel,
+        st.canvas_sel_primary,
     }) catch "";
     u.drawText(16, h - 40, 1.5, u.theme.text_dim, msg);
     u.drawText(16, h - 22, 1.5, u.theme.text_dim, "Ctrl+P palette  |  type scene");

@@ -941,8 +941,10 @@ pub const Ui = struct {
                 .w = list_r.w - 8, // leave room for scrollbar
                 .h = row_h,
             };
-            // Hover selects (more intuitive than wheel-select).
-            if (ir.contains(self.input.mouse_x, self.input.mouse_y)) {
+            // Hover selects only while the mouse is *moving* so arrow keys still
+            // work when the cursor rests over a row.
+            const mouse_moved = @abs(self.input.mouse_dx) > 0.5 or @abs(self.input.mouse_dy) > 0.5;
+            if (mouse_moved and ir.contains(self.input.mouse_x, self.input.mouse_y)) {
                 self.palette_sel = match_i;
             }
             const on = match_i == self.palette_sel;

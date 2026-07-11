@@ -86,8 +86,9 @@ pub const State = struct {
     canvas_zoom: f32 = 1,
     canvas_panning: bool = false,
     canvas_orbiting: bool = false,
-    /// Selected entity index in canvas demo world (-1 = none).
-    canvas_sel: i32 = -1,
+    /// Multi-select bit mask (bit i = entity i selected). Primary = last clicked.
+    canvas_sel_mask: u32 = 0,
+    canvas_sel_primary: i32 = -1,
 
     pub fn init(self: *State) void {
         const hello = "hello gl1";
