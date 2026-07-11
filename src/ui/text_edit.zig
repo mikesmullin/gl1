@@ -716,13 +716,14 @@ pub fn posFromPoint(
 }
 
 /// Ctrl+D (VS Code “Add Next Occurrence”):
-/// 1st (no multi-caret find active): select word nearest caret.
-/// 2nd+: add next *exact* match of that selection (whole-word when first pick was a word).
+/// - No selection: select word nearest caret (session starts; does not add another match yet).
+/// - Already have a selection (mouse/shift or prior Ctrl+D): add next exact match of that
+///   selection (whole-word when the needle sits on word boundaries). Repeat until no matches.
 pub fn ctrlD(edit: *Edit, text: []const u8) void {
     const p = &edit.carets[0];
 
-    // First press: select nearest word (unless we already have a multi-caret session).
-    if (!edit.ctrl_d_active or !p.hasSel()) {
+    // No selection yet → select nearest word only (like a first press with empty sel).
+    if (!p.hasSel()) {
         const w = wordAt(text, p.caret);
         if (w.start < w.end) {
             p.anchor = w.start;
@@ -733,7 +734,8 @@ pub fn ctrlD(edit: *Edit, text: []const u8) void {
         return;
     }
 
-    // Subsequent: exact text of primary selection; prefer whole-word if selection is a word.
+    // Selection already exists (user made it, or prior Ctrl+D selected the word):
+    // treat as “add next occurrence” of the primary selection text.
     const sel_lo = p.lo();
     const sel_hi = p.hi();
     if (sel_lo >= sel_hi) return;
@@ -751,6 +753,7 @@ pub fn ctrlD(edit: *Edit, text: []const u8) void {
             edit.caret_ct += 1;
         }
     }
+    edit.ctrl_d_active = true;
 }
 
 /// Collapse multi-caret to primary (Esc).
@@ -1136,4 +1139,30 @@ test "multi-caret whole-string insert" {
     edit.caret_ct = 2;
     try std.testing.expect(insertText(&edit, &buf, &len, "YY"));
     try std.testing.expectEqualStrings("aa YY bb YY cc", buf[0..len]);
+}
+
+test "ctrlD: no selection selects word only" {
+    const text = "say haha then haha end";
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .caret = 6, .anchor = 6 }; // inside first haha
+    ctrlD(&edit, text);
+    try std.testing.expectEqual(@as(usize, 1), edit.caret_ct);
+    try std.testing.expectEqual(@as(usize, 4), edit.carets[0].lo());
+    try std.testing.expectEqual(@as(usize, 8), edit.carets[0].hi());
+    try std.testing.expect(edit.ctrl_d_active);
+}
+
+test "ctrlD: existing selection adds next match on first press" {
+    const text = "say haha then haha end";
+    var edit: Edit = .{};
+    // User already selected first "haha" (e.g. double-click / drag)
+    edit.carets[0] = .{ .anchor = 4, .caret = 8 };
+    edit.ctrl_d_active = false;
+    ctrlD(&edit, text);
+    try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
+    try std.testing.expectEqual(@as(usize, 4), edit.carets[0].lo());
+    try std.testing.expectEqual(@as(usize, 8), edit.carets[0].hi());
+    try std.testing.expectEqual(@as(usize, 14), edit.carets[1].lo());
+    try std.testing.expectEqual(@as(usize, 18), edit.carets[1].hi());
+    try std.testing.expect(edit.ctrl_d_active);
 }
