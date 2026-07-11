@@ -13,26 +13,20 @@ pub const parse = state.parse;
 pub const nameOf = state.nameOf;
 
 const triangle = @import("triangle.zig");
-const rects = @import("rects.zig");
 const text = @import("text.zig");
-const widgets_basic = @import("widgets_basic.zig");
 const panels = @import("panels.zig");
-const layout = @import("layout.zig");
 const inspector = @import("inspector.zig");
 const canvas = @import("canvas.zig");
 const storybook = @import("storybook.zig");
 
-/// Alphabetical "Scene: …" entries first (so filtering "scene" is predictable).
+/// Favorite-first scene list for palette (then actions).
 const palette_cmds = [_][]const u8{
-    "Scene: canvas",
     "Scene: inspector",
-    "Scene: layout",
-    "Scene: panels",
-    "Scene: rects",
+    "Scene: canvas",
     "Scene: storybook",
     "Scene: text",
     "Scene: triangle",
-    "Scene: widgets_basic",
+    "Scene: panels",
     "Action: Log hello",
     "Action: Toast hello",
     "Action: Toggle console",
@@ -44,11 +38,8 @@ pub fn frame(a: *app.App) void {
 
     switch (a.scene) {
         .triangle => triangle.frame(a),
-        .rects => rects.frame(a),
         .text => text.frame(a),
-        .widgets_basic => widgets_basic.frame(a),
         .panels => panels.frame(a),
-        .layout => layout.frame(a),
         .inspector => inspector.frame(a),
         .canvas => canvas.frame(a),
         .storybook => storybook.frame(a),
@@ -62,19 +53,16 @@ fn runCommandPalette(a: *app.App) void {
     const u = &a.ui;
     if (u.commandPalette(.{ .items = &palette_cmds })) |idx| {
         switch (idx) {
-            0 => a.scene = .canvas,
-            1 => a.scene = .inspector,
-            2 => a.scene = .layout,
-            3 => a.scene = .panels,
-            4 => a.scene = .rects,
-            5 => a.scene = .storybook,
-            6 => a.scene = .text,
-            7 => a.scene = .triangle,
-            8 => a.scene = .widgets_basic,
-            9 => u.log("palette: hello"),
-            10 => u.toast("Hello from palette", .ok, 1.5),
-            11 => a.scene_state.show_console = !a.scene_state.show_console,
-            12 => a.scene_state.theme_cool = !a.scene_state.theme_cool,
+            0 => a.scene = .inspector,
+            1 => a.scene = .canvas,
+            2 => a.scene = .storybook,
+            3 => a.scene = .text,
+            4 => a.scene = .triangle,
+            5 => a.scene = .panels,
+            6 => u.log("palette: hello"),
+            7 => u.toast("Hello from palette", .ok, 1.5),
+            8 => a.scene_state.show_console = !a.scene_state.show_console,
+            9 => a.scene_state.theme_cool = !a.scene_state.theme_cool,
             else => {},
         }
         u.log("palette");

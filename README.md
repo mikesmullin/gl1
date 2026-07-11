@@ -25,7 +25,7 @@ product UI.
 zvm use master
 zig build
 ./zig-out/bin/gl1                    # default: storybook
-./zig-out/bin/gl1 --scene canvas
+./zig-out/bin/gl1 --scene inspector
 ./zig-out/bin/gl1 help
 ```
 
@@ -54,113 +54,25 @@ Scene switching is via the palette (type `scene`). Digits stay free for typing.
 
 ## Scenes overview
 
+Favorite demos first:
+
 | Scene | CLI | Description |
 |-------|-----|-------------|
-| [`storybook`](#storybook) | `--scene storybook` | Living widget gallery (**default**) |
-| [`triangle`](#triangle) | `--scene triangle` | Hello triangle + mouse readout |
-| [`rects`](#rects) | `--scene rects` | Colored rectangles |
-| [`text`](#text) | `--scene text` | Bitmap font sample |
-| [`widgets_basic`](#widgets_basic) | `--scene widgets_basic` | Basic form widgets |
-| [`panels`](#panels) | `--scene panels` | Nested panels |
-| [`layout`](#layout) | `--scene layout` | vstack / hstack |
-| [`inspector`](#inspector) | `--scene inspector` | App chrome composite (menubar, split, tree, form, notes, console) |
+| [`inspector`](#inspector) | `--scene inspector` | App chrome: menubar, split, tree, form, notes, console |
 | [`canvas`](#canvas) | `--scene canvas` | Blender-like 3D orbit viewport + entity cubes |
+| [`storybook`](#storybook) | `--scene storybook` | Living widget gallery (**default**) |
+| [`text`](#text) | `--scene text` | Bitmap font sample |
+| [`triangle`](#triangle) | `--scene triangle` | Hello triangle + mouse readout |
+| [`panels`](#panels) | `--scene panels` | Desktop windows + dock (drag / resize / toggle) |
 
 ---
 
 ## Scene gallery
 
-### storybook
-
-Widget gallery with a sidebar index. Default launch scene.
-
-![storybook](docs/screenshots/storybook.png)
-
-| Input | Action |
-|-------|--------|
-| Click sidebar row | Open that widget’s playground |
-| Scroll sidebar / detail | Wheel when hovered (scissor-clipped) |
-| **Ctrl+P** | Command palette |
-
----
-
-### triangle
-
-Minimal Sokol GL triangle and mouse position HUD.
-
-![triangle](docs/screenshots/triangle.png)
-
-| Input | Action |
-|-------|--------|
-| Move mouse | Updates on-screen position readout |
-
----
-
-### rects
-
-Colored rectangles + labels (2D draw smoke test).
-
-![rects](docs/screenshots/rects.png)
-
-| Input | Action |
-|-------|--------|
-| — | View only |
-
----
-
-### text
-
-Bitmap font atlas demo (magenta chroma key → transparency).
-
-![text](docs/screenshots/text.png)
-
-| Input | Action |
-|-------|--------|
-| — | View only |
-
----
-
-### widgets_basic
-
-Label, button, checkbox, toggle, Blender-style slider, text field, progress.
-
-![widgets_basic](docs/screenshots/widgets_basic.png)
-
-| Input | Action |
-|-------|--------|
-| Click / drag widgets | Standard control interaction |
-| Slider: LMB drag on bar | Relative drag; cursor hides while dragging |
-
----
-
-### panels
-
-Nested `beginPanel` / `endPanel` with title bars and optional scroll.
-
-![panels](docs/screenshots/panels.png)
-
-| Input | Action |
-|-------|--------|
-| Wheel over scrollable panel | Scroll panel content |
-
----
-
-### layout
-
-vstack / hstack padding and gap demo.
-
-![layout](docs/screenshots/layout.png)
-
-| Input | Action |
-|-------|--------|
-| Sliders / buttons | Exercise nested layout |
-
----
-
 ### inspector
 
-Composite “app shell”: menubar, left tree + filter, splitter, property form,
-viewport preview, multi-line **Notes** textarea, console.
+Composite “app shell”: menubar, left tree + filter, splitter, property form
+(Blender-style sliders), viewport preview, multi-line **Notes** textarea, console.
 
 ![inspector](docs/screenshots/inspector.png)
 
@@ -197,6 +109,61 @@ entities, selection outlines, orientation compass, fly mode.
 | **F** or **Numpad `.`** | Frame selection (center + zoom ~80%, 250 ms tween) |
 | **1** / **3** / **7** | Front / Right / Top view (numpad or top-row) |
 | Top-right RGB gizmo | World-axis orientation (always on) |
+
+---
+
+### storybook
+
+Widget gallery with a sidebar index. Default launch scene.
+
+![storybook](docs/screenshots/storybook.png)
+
+| Input | Action |
+|-------|--------|
+| Click sidebar row | Open that widget’s playground |
+| Scroll sidebar / detail | Wheel when hovered (scissor-clipped) |
+| **Ctrl+P** | Command palette |
+
+---
+
+### text
+
+Bitmap font atlas demo (magenta chroma key → transparency).
+
+![text](docs/screenshots/text.png)
+
+| Input | Action |
+|-------|--------|
+| — | View only |
+
+---
+
+### triangle
+
+Minimal Sokol GL triangle and mouse position HUD.
+
+![triangle](docs/screenshots/triangle.png)
+
+| Input | Action |
+|-------|--------|
+| Move mouse | Updates on-screen position readout |
+
+---
+
+### panels
+
+Lightweight **desktop**: floating windows, title-bar drag, bottom-right resize
+triangle, and a macOS-style dock that opens/closes windows while **remembering
+position and size**.
+
+![panels](docs/screenshots/panels.png)
+
+| Input | Action |
+|-------|--------|
+| Drag window title bar | Move window |
+| Drag bottom-right triangle | Resize window |
+| Click dock icon | Toggle window open/closed (geometry preserved) |
+| Wheel over window body | Scroll clipped content |
 
 ---
 
@@ -239,11 +206,10 @@ src/
     components/         modular widgets (slider, textArea, …)
   scenes/
     scenes.zig          runner + palette wiring
-    *.zig               per-scene demos
+    inspector.zig canvas.zig storybook.zig text.zig triangle.zig panels.zig
 assets/fonts/
   glyphs-outline.bmp    bitmap font atlas (magenta = transparent)
 docs/screenshots/       committed scene screenshots (for this README)
-tmp/                    local notes / plans (gitignored content may vary)
 ```
 
 ## Design notes
@@ -252,18 +218,17 @@ tmp/                    local notes / plans (gitignored content may vary)
 - **Font:** fixed-cell bitmap atlas (`5×8` glyphs, `32×4` grid); pink/magenta chroma key → alpha  
 - **Layout:** simple vstack/hstack (flex-inspired; no external layout library)  
 - **Draw:** widgets emit a `RenderCommand` list; Sokol/GL backend executes it  
+- **Panels:** body always scissor-clipped; desktop scene adds drag/resize/dock  
 - **Scroll capture:** overlays (palette) own the wheel via `wheelY` / `eatScroll`  
-- **Anim:** `src/anim.zig` for camera framing tweens (expandable)  
+- **Anim:** `src/anim.zig` for camera framing tweens  
 - **Sokol:** official [`sokol-zig`](https://github.com/floooh/sokol-zig) package  
 
 ## Regenerating screenshots
 
-With a working display:
-
 ```bash
 zig build
 mkdir -p docs/screenshots
-for s in storybook triangle rects text widgets_basic panels layout inspector canvas; do
+for s in inspector canvas storybook text triangle panels; do
   ./zig-out/bin/gl1 --scene "$s" &
   pid=$!
   sleep 1.5

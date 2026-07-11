@@ -647,9 +647,8 @@ pub const Ui = struct {
         };
 
         var scroll_off: f32 = 0;
-        // Clip body content (always when scrollable) so scrolled widgets cannot paint
-        // over the title bar or outside the panel. Nested text-field scissors pop
-        // back to this clip via draw.List's scissor stack.
+        // Always scissor panel body so labels/buttons cannot paint past the border
+        // (fixes “Zig defer.” overflow). Nested text-field scissors restore parent.
         if (opts.scroll) {
             const gop = self.scroll_y.getOrPut(i.a) catch null;
             if (gop) |g| {
@@ -663,17 +662,18 @@ pub const Ui = struct {
                 }
                 scroll_off = g.value_ptr.*;
             }
-            self.cmds.push(.{ .scissor_push = .{
-                .x = body.x + 1,
-                .y = body.y + 1,
-                .w = @max(0, body.w - 2),
-                .h = @max(0, body.h - 2),
-            } });
         }
+        self.cmds.push(.{ .scissor_push = .{
+            .x = body.x + 1,
+            .y = body.y + 1,
+            .w = @max(0, body.w - 2),
+            .h = @max(0, body.h - 2),
+        } });
 
         self.pushId(opts.id);
         if (self.panel_scroll_depth < self.panel_scroll_stack.len) {
-            self.panel_scroll_stack[self.panel_scroll_depth] = opts.scroll;
+            // Always true: endPanel always pops one scissor.
+            self.panel_scroll_stack[self.panel_scroll_depth] = true;
             self.panel_scroll_depth += 1;
         }
         self.beginVStack(.{

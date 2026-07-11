@@ -16,14 +16,11 @@ const HELP =
     \\
     \\scenes:
     \\  storybook       widget gallery (default)
-    \\  triangle        hello triangle + mouse
-    \\  rects           colored rects
+    \\  inspector       app chrome composite
+    \\  canvas          3D orbit viewport
     \\  text            bitmap font sample
-    \\  widgets_basic   label/button/slider/…
-    \\  panels          begin/end panels
-    \\  layout          vstack/hstack
-    \\  inspector       composite app chrome demo
-    \\  canvas          pan/zoom 2D world grid
+    \\  triangle        hello triangle
+    \\  panels          desktop windows + dock
     \\
     \\keys:
     \\  Ctrl+P          command palette (type "scene" for scenes)

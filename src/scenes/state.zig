@@ -1,27 +1,21 @@
 const std = @import("std");
 
 pub const SceneKind = enum {
-    storybook,
-    triangle,
-    rects,
-    text,
-    widgets_basic,
-    panels,
-    layout,
     inspector,
     canvas,
+    storybook,
+    text,
+    triangle,
+    panels,
 };
 
 pub const all = [_]SceneKind{
-    .storybook,
-    .triangle,
-    .rects,
-    .text,
-    .widgets_basic,
-    .panels,
-    .layout,
     .inspector,
     .canvas,
+    .storybook,
+    .text,
+    .triangle,
+    .panels,
 };
 
 pub fn parse(name: []const u8) ?SceneKind {
@@ -31,6 +25,15 @@ pub fn parse(name: []const u8) ?SceneKind {
 pub fn nameOf(k: SceneKind) []const u8 {
     return @tagName(k);
 }
+
+/// Floating desktop window for the panels scene.
+pub const DeskWin = struct {
+    open: bool = false,
+    x: f32 = 80,
+    y: f32 = 60,
+    w: f32 = 300,
+    h: f32 = 220,
+};
 
 pub const State = struct {
     selected: usize = 0,
@@ -71,28 +74,32 @@ pub const State = struct {
     show_console: bool = true,
     console_h: f32 = 120,
     /// Canvas scene — orbit camera (Blender-ish mini viewport).
-    /// Target point the camera looks at / orbits around.
     canvas_tx: f32 = 0,
     canvas_ty: f32 = 0,
     canvas_tz: f32 = 0,
-    /// Orbit angles (radians). Default = slight 3/4 view (Y-up, green axis upright).
     canvas_yaw: f32 = 0.6,
     canvas_pitch: f32 = -0.55,
-    /// Distance from target.
     canvas_dist: f32 = 420,
-    /// Legacy 2D pan/zoom kept for any old refs; canvas uses 3D camera now.
     canvas_ox: f32 = 0,
     canvas_oy: f32 = 0,
     canvas_zoom: f32 = 1,
     canvas_panning: bool = false,
     canvas_orbiting: bool = false,
     canvas_strafing: bool = false,
-    /// Multi-select bit mask (bit i = entity i selected). Primary = last clicked.
     canvas_sel_mask: u32 = 0,
     canvas_sel_primary: i32 = -1,
-    /// Frame-selected camera anim (numpad `.`) — Game9-style Timer + parallel Tweens.
-    /// Channels: 0=tx, 1=ty, 2=tz, 3=dist.
     canvas_frame: @import("../anim.zig").Parallel = .{},
+
+    /// Panels scene — desktop windows (positions remembered while open/closed).
+    desk_a: DeskWin = .{ .open = true, .x = 40, .y = 40, .w = 300, .h = 220 },
+    desk_b: DeskWin = .{ .open = true, .x = 380, .y = 80, .w = 320, .h = 260 },
+    desk_c: DeskWin = .{ .open = false, .x = 200, .y = 140, .w = 280, .h = 200 },
+    desk_drag: i32 = -1, // which window: 0=a,1=b,2=c
+    desk_resize: i32 = -1,
+    desk_drag_ox: f32 = 0,
+    desk_drag_oy: f32 = 0,
+    desk_resize_sw: f32 = 0,
+    desk_resize_sh: f32 = 0,
 
     pub fn init(self: *State) void {
         const hello = "hello gl1";
