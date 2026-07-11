@@ -629,7 +629,8 @@ pub fn frame(a: *app.App) void {
         st.canvas_dist = outs[3];
     }
 
-    // Middle mouse: orbit, or Shift+MMB strafe (pan in camera plane).
+    // Middle mouse: orbit (yaw/pitch only — never snap/translate look-target on click),
+    // or Shift+MMB strafe (pan in camera plane).
     if (a.input.mousePressed(.middle)) {
         st.canvas_frame.cancel(); // user takes over
         if (a.input.shift) {
@@ -638,28 +639,25 @@ pub fn frame(a: *app.App) void {
         } else {
             st.canvas_orbiting = true;
             st.canvas_strafing = false;
-            const pivot = orbitPivot(st);
-            st.canvas_tx = pivot.x;
-            st.canvas_ty = pivot.y;
-            st.canvas_tz = pivot.z;
+            // Do NOT reassign canvas_t* here: MMB down must not center/translate.
+            // Orbit rotates around the current look-target; numpad `.` frames selection.
         }
     }
     if (a.input.mouseReleased(.middle)) {
         st.canvas_orbiting = false;
         st.canvas_strafing = false;
     }
+    // Orbit only while the mouse actually moves (dx/dy); pure click = no camera change.
     if (st.canvas_orbiting and a.input.mouseDown(.middle) and !a.input.shift) {
-        if (st.canvas_sel_primary >= 0) {
-            const pivot = orbitPivot(st);
-            st.canvas_tx = pivot.x;
-            st.canvas_ty = pivot.y;
-            st.canvas_tz = pivot.z;
+        const md = a.input.mouse_dx;
+        const my = a.input.mouse_dy;
+        if (md != 0 or my != 0) {
+            const sens: f32 = 0.005;
+            st.canvas_yaw -= md * sens;
+            st.canvas_pitch -= my * sens;
+            const lim: f32 = std.math.pi * 0.5 - 0.02;
+            st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
         }
-        const sens: f32 = 0.005;
-        st.canvas_yaw -= a.input.mouse_dx * sens;
-        st.canvas_pitch -= a.input.mouse_dy * sens;
-        const lim: f32 = std.math.pi * 0.5 - 0.02;
-        st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
     }
 
     // Pan — Space+LMB or Shift+MMB strafe
