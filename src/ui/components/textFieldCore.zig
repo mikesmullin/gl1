@@ -44,14 +44,23 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
 
     ui.drawRectBorder(box, ui.theme.input_bg, if (focused) ui.theme.accent else ui.theme.panel_border, 1);
 
+    // Content width inside padding (6px left + ~6px right).
+    const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
+
     var changed = false;
+    // Hard-wrap whenever we know the field width — including the first frame
+    // (default buffer text) and after resize — not only after a key edit.
+    if (opts.multiline and wrap_px > 0) {
+        if (te.hardWrap(ed, opts.buf, opts.len, ui.font, opts.size, wrap_px)) {
+            changed = true;
+        }
+    }
+
     if (focused) {
         // Esc ending a Ctrl+D / multi-caret session should not also clear focus.
         if (ui.input.keyPressed(.escape) and (ed.ctrl_d_active or ed.caret_ct > 1)) {
             ui.consumed_escape = true;
         }
-        // Content width inside padding (6px left + ~6px right).
-        const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
         changed = te.handleKeys(
             ed,
             opts.buf,
@@ -61,7 +70,7 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
             wrap_px,
             ui.font,
             opts.size,
-        );
+        ) or changed;
     }
 
     ui.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
