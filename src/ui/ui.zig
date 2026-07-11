@@ -808,50 +808,91 @@ pub const Ui = struct {
             }
         }
 
+        // Layout: fixed chrome + fixed list viewport (always max_vis rows tall when
+        // there are matches) so the box does not grow/shrink with partial last page
+        // and the list never paints past the border.
+        const pad: f32 = 12;
+        const title_h: f32 = 22;
+        const gap: f32 = 8;
+        const list_viewport_h = @as(f32, @floatFromInt(max_vis)) * row_h;
+        const chrome_h = pad + title_h + gap + row_h + gap; // title + query + gaps
+        const bottom_pad: f32 = pad;
+
         if (mct == 0) {
-            const ph_empty: f32 = row_h + 12 + row_h + 16;
+            const ph_empty = chrome_h + row_h + bottom_pad;
             const box = Rect{ .x = (self.width - pw) * 0.5, .y = self.height * 0.18, .w = pw, .h = ph_empty };
             self.drawRectBorderFront(box, self.theme.modal, self.theme.accent, 2);
-            self.drawTextFront(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
-            const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
+            self.drawTextFront(box.x + pad, box.y + pad, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
+            const qbox = Rect{ .x = box.x + pad, .y = box.y + pad + title_h + gap, .w = pw - pad * 2, .h = row_h };
             self.drawRectBorderFront(qbox, self.theme.input_bg, self.theme.accent, 1);
             if (q.len == 0)
                 self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter… e.g. scene")
             else
                 self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
-            self.drawTextFront(box.x + 12, qbox.y + row_h + 12, self.theme.font_size, self.theme.text_dim, "No matches");
+            self.drawTextFront(box.x + pad, qbox.y + row_h + gap, self.theme.font_size, self.theme.text_dim, "No matches");
             return null;
         }
 
         if (self.palette_sel >= mct) self.palette_sel = mct - 1;
+
+        // Keyboard: move selection (scroll follows below).
         if (self.input.keyPressed(.down)) self.palette_sel = @min(self.palette_sel + 1, mct - 1);
         if (self.input.keyPressed(.up) and self.palette_sel > 0) self.palette_sel -= 1;
 
         const max_scroll = if (mct > max_vis) mct - max_vis else 0;
+        const ph = chrome_h + list_viewport_h + bottom_pad;
+        const box = Rect{ .x = (self.width - pw) * 0.5, .y = self.height * 0.18, .w = pw, .h = ph };
+        const qbox = Rect{ .x = box.x + pad, .y = box.y + pad + title_h + gap, .w = pw - pad * 2, .h = row_h };
+        const list_y = qbox.y + row_h + gap;
+        const list_r = Rect{ .x = box.x + pad, .y = list_y, .w = pw - pad * 2, .h = list_viewport_h };
+
+        // Wheel over the palette: move selection (same as arrows). Previously we
+        // only moved palette_scroll while palette_sel stayed at 0, then the
+        // "keep sel visible" clamp snapped scroll back every frame → jitter.
+        // Accept wheel anywhere on the palette chrome, not only the list.
+        if (box.contains(self.input.mouse_x, self.input.mouse_y) and self.input.scroll_y != 0) {
+            // scroll_y > 0 typically means wheel up → earlier items.
+            const steps_f = @abs(self.input.scroll_y);
+            var steps: usize = @intFromFloat(@floor(steps_f));
+            if (steps == 0) steps = 1;
+            var s: usize = 0;
+            while (s < steps) : (s += 1) {
+                if (self.input.scroll_y > 0) {
+                    if (self.palette_sel > 0) self.palette_sel -= 1;
+                } else {
+                    if (self.palette_sel + 1 < mct) self.palette_sel += 1;
+                }
+            }
+            // Consume so panels under the overlay do not also scroll.
+            self.input.scroll_y = 0;
+        } else if (self.input.scroll_y != 0) {
+            // Overlay is open: don't scroll the scene underneath either.
+            self.input.scroll_y = 0;
+        }
+
+        // Keep selection in the viewport (keyboard + wheel).
         if (self.palette_sel < self.palette_scroll) self.palette_scroll = self.palette_sel;
         if (self.palette_sel >= self.palette_scroll + max_vis)
             self.palette_scroll = self.palette_sel + 1 - max_vis;
         if (self.palette_scroll > max_scroll) self.palette_scroll = max_scroll;
 
         const vis = @min(mct - self.palette_scroll, max_vis);
-        const ph: f32 = row_h + 12 + @as(f32, @floatFromInt(@max(vis, 1))) * row_h + 16;
-        const box = Rect{ .x = (self.width - pw) * 0.5, .y = self.height * 0.18, .w = pw, .h = ph };
+
         self.drawRectBorderFront(box, self.theme.modal, self.theme.accent, 2);
-        self.drawTextFront(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
-        const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
+        self.drawTextFront(box.x + pad, box.y + pad, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
         self.drawRectBorderFront(qbox, self.theme.input_bg, self.theme.accent, 1);
         if (q.len == 0)
             self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter… e.g. scene")
         else
             self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
 
-        const list_y = qbox.y + row_h + 8;
-        const list_h = @as(f32, @floatFromInt(vis)) * row_h;
-        const list_r = Rect{ .x = box.x + 12, .y = list_y, .w = pw - 24, .h = list_h };
-        if (list_r.contains(self.input.mouse_x, self.input.mouse_y) and self.input.scroll_y != 0) {
-            if (self.input.scroll_y > 0 and self.palette_scroll > 0) self.palette_scroll -= 1;
-            if (self.input.scroll_y < 0 and self.palette_scroll < max_scroll) self.palette_scroll += 1;
-        }
+        // Clip list rows to the viewport (fixes ~10px bottom overflow).
+        self.front.push(.{ .scissor_push = .{
+            .x = list_r.x,
+            .y = list_r.y,
+            .w = list_r.w,
+            .h = list_r.h,
+        } });
 
         var result: ?usize = null;
         var vi: usize = 0;
@@ -859,9 +900,9 @@ pub const Ui = struct {
             const match_i = self.palette_scroll + vi;
             const item_idx = matches[match_i];
             const ir = Rect{
-                .x = box.x + 12,
+                .x = list_r.x,
                 .y = list_y + @as(f32, @floatFromInt(vi)) * row_h,
-                .w = pw - 24,
+                .w = list_r.w - 8, // leave room for scrollbar
                 .h = row_h,
             };
             const on = match_i == self.palette_sel;
@@ -869,12 +910,13 @@ pub const Ui = struct {
             self.drawTextFront(ir.x + 8, ir.y + 6, self.theme.font_size, if (on) self.theme.accent else self.theme.text, opts.items[item_idx]);
             if (self.interact(self.idFlat(opts.items[item_idx]), ir, false).clicked) result = item_idx;
         }
+        self.front.push(.{ .scissor_pop = {} });
 
         if (max_scroll > 0) {
-            const track = Rect{ .x = box.x + pw - 10, .y = list_y, .w = 4, .h = list_h };
+            const track = Rect{ .x = box.x + pw - pad - 4, .y = list_y, .w = 4, .h = list_viewport_h };
             self.drawRectFront(track, self.theme.slider_track);
-            const thumb_h = @max(12, list_h * @as(f32, @floatFromInt(vis)) / @as(f32, @floatFromInt(mct)));
-            const thumb_t = list_y + (list_h - thumb_h) * (@as(f32, @floatFromInt(self.palette_scroll)) / @as(f32, @floatFromInt(max_scroll)));
+            const thumb_h = @max(12, list_viewport_h * @as(f32, @floatFromInt(vis)) / @as(f32, @floatFromInt(mct)));
+            const thumb_t = list_y + (list_viewport_h - thumb_h) * (@as(f32, @floatFromInt(self.palette_scroll)) / @as(f32, @floatFromInt(max_scroll)));
             self.drawRectFront(.{ .x = track.x, .y = thumb_t, .w = 4, .h = thumb_h }, self.theme.accent);
         }
 
