@@ -31,6 +31,7 @@ pub const Key = enum {
     v,
     x,
     z,
+    l,
     one,
     two,
     three,
@@ -51,8 +52,8 @@ pub const Config = struct {
     key_repeat_delay_s: f64 = 0.240,
     /// Interval between subsequent software repeats.
     key_repeat_rate_s: f64 = 0.060,
-    /// Multi-click chain window (double/triple click).
-    multi_click_s: f64 = 0.120,
+    /// Multi-click chain window (double/triple click). ~350ms matches typical editors.
+    multi_click_s: f64 = 0.350,
 };
 
 pub var config: Config = .{};
@@ -261,6 +262,7 @@ pub const Input = struct {
             .V => .v,
             .X => .x,
             .Z => .z,
+            .L => .l,
             ._1 => .one,
             ._2 => .two,
             ._3 => .three,

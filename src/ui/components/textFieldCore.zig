@@ -13,7 +13,8 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     const ed = ui.editState(opts.id_key);
     ed.clampAll(opts.len.*);
 
-    if (st.clicked or (ui.input.mousePressed(.left) and box.contains(ui.input.mouse_x, ui.input.mouse_y))) {
+    // Only on press — never on release (`st.clicked`), so multi-click counting stays correct.
+    if (ui.input.mousePressed(.left) and box.contains(ui.input.mouse_x, ui.input.mouse_y)) {
         ui.focus = i;
         const ox = box.x + 6;
         const oy = box.y + 4 - opts.scroll_y;
@@ -33,6 +34,7 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
         );
     }
     const focused = ui.focus.a == opts.id_key;
+    _ = st; // hit-test still registered for hot/active
     if (focused and ui.input.mouseDown(.left) and ed.dragging) {
         const ox = box.x + 6;
         const oy = box.y + 4 - opts.scroll_y;

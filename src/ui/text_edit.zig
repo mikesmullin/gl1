@@ -62,6 +62,17 @@ pub const Edit = struct {
     undo_at: usize = 0,
     /// Coalesce typing into one undo step until pause/nav.
     coalesce_typing: bool = false,
+    /// After first Ctrl+D word select, subsequent presses add exact matches.
+    ctrl_d_active: bool = false,
+    /// User-resized dimensions for multi-line (0 = use layout default).
+    user_w: f32 = 0,
+    user_h: f32 = 0,
+    /// Resize grip drag.
+    resizing: bool = false,
+    resize_anchor_x: f32 = 0,
+    resize_anchor_y: f32 = 0,
+    resize_start_w: f32 = 0,
+    resize_start_h: f32 = 0,
 
     pub fn primary(self: *Edit) *Range {
         return &self.carets[0];
@@ -210,7 +221,6 @@ pub fn wordStart(text: []const u8, pos: usize) usize {
     var i = @min(pos, text.len);
     if (i == 0) return 0;
     if (i == text.len or !isWord(text[i])) {
-        // move left into a word
         while (i > 0 and !isWord(text[i - 1])) : (i -= 1) {}
     }
     while (i > 0 and isWord(text[i - 1])) : (i -= 1) {}
@@ -222,6 +232,52 @@ pub fn wordEnd(text: []const u8, pos: usize) usize {
     while (i < text.len and !isWord(text[i])) : (i += 1) {}
     while (i < text.len and isWord(text[i])) : (i += 1) {}
     return i;
+}
+
+/// Word nearest caret (VS Code-style): prefer word under caret, else next, else previous.
+pub fn wordAt(text: []const u8, pos: usize) struct { start: usize, end: usize } {
+    if (text.len == 0) return .{ .start = 0, .end = 0 };
+    const p = @min(pos, text.len);
+    if (p < text.len and isWord(text[p])) {
+        return .{ .start = wordStart(text, p), .end = wordEnd(text, p) };
+    }
+    if (p > 0 and isWord(text[p - 1])) {
+        return .{ .start = wordStart(text, p - 1), .end = wordEnd(text, p - 1) };
+    }
+    // seek forward
+    var i = p;
+    while (i < text.len and !isWord(text[i])) : (i += 1) {}
+    if (i < text.len) {
+        return .{ .start = wordStart(text, i), .end = wordEnd(text, i) };
+    }
+    // seek backward
+    i = p;
+    while (i > 0 and !isWord(text[i - 1])) : (i -= 1) {}
+    if (i > 0) {
+        return .{ .start = wordStart(text, i - 1), .end = wordEnd(text, i - 1) };
+    }
+    return .{ .start = p, .end = p };
+}
+
+fn isWholeWordBoundary(text: []const u8, lo: usize, hi: usize) bool {
+    if (lo > 0 and isWord(text[lo - 1])) return false;
+    if (hi < text.len and isWord(text[hi])) return false;
+    return true;
+}
+
+/// Find next exact substring match of `needle` at/after `start`.
+/// When `whole_word`, only match at word boundaries (Ctrl+D after word select).
+pub fn findNextMatch(text: []const u8, needle: []const u8, start: usize, whole_word: bool) ?struct { start: usize, end: usize } {
+    if (needle.len == 0 or start >= text.len) return null;
+    var i = start;
+    while (i + needle.len <= text.len) : (i += 1) {
+        if (std.mem.eql(u8, text[i .. i + needle.len], needle)) {
+            if (!whole_word or isWholeWordBoundary(text, i, i + needle.len)) {
+                return .{ .start = i, .end = i + needle.len };
+            }
+        }
+    }
+    return null;
 }
 
 pub fn prevWord(text: []const u8, pos: usize) usize {
@@ -549,46 +605,76 @@ pub fn posFromPoint(
     return best;
 }
 
-/// Ctrl+D:
-/// 1st: select word nearest caret (if no selection, or selection is not that word)
-/// 2nd+: add next identical match as multi-caret selection
+/// Ctrl+D (VS Code “Add Next Occurrence”):
+/// 1st (no multi-caret find active): select word nearest caret.
+/// 2nd+: add next *exact* match of that selection (whole-word when first pick was a word).
 pub fn ctrlD(edit: *Edit, text: []const u8) void {
     const p = &edit.carets[0];
-    // Resolve word at caret
-    const ws = wordStart(text, if (p.caret < text.len) p.caret else p.caret);
-    const we = wordEnd(text, p.caret);
-    const word_ok = ws < we;
 
-    if (!p.hasSel() or edit.caret_ct == 1) {
-        // First press (or only primary caret): ensure word is selected
-        if (!p.hasSel() or (word_ok and !(p.lo() == ws and p.hi() == we))) {
-            if (word_ok) {
-                p.anchor = ws;
-                p.caret = we;
-                edit.caret_ct = 1;
-                return;
-            }
-            return;
+    // First press: select nearest word (unless we already have a multi-caret session).
+    if (!edit.ctrl_d_active or !p.hasSel()) {
+        const w = wordAt(text, p.caret);
+        if (w.start < w.end) {
+            p.anchor = w.start;
+            p.caret = w.end;
+            edit.caret_ct = 1;
+            edit.ctrl_d_active = true;
         }
+        return;
     }
-    // Subsequent: match next occurrence of primary selection text
+
+    // Subsequent: exact text of primary selection; prefer whole-word if selection is a word.
     const sel_lo = p.lo();
     const sel_hi = p.hi();
     if (sel_lo >= sel_hi) return;
     const needle = text[sel_lo..sel_hi];
+    const whole = isWholeWordBoundary(text, sel_lo, sel_hi);
+
     var start: usize = 0;
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         start = @max(start, edit.carets[i].hi());
     }
-    if (start >= text.len) return;
-    if (std.mem.indexOf(u8, text[start..], needle)) |rel| {
-        const abs = start + rel;
+    if (findNextMatch(text, needle, start, whole)) |m| {
         if (edit.caret_ct < MaxCarets) {
-            edit.carets[edit.caret_ct] = .{ .anchor = abs, .caret = abs + needle.len };
+            edit.carets[edit.caret_ct] = .{ .anchor = m.start, .caret = m.end };
             edit.caret_ct += 1;
         }
     }
+}
+
+/// Collapse multi-caret to primary (Esc).
+pub fn collapseCarets(edit: *Edit) void {
+    if (edit.caret_ct > 1) {
+        edit.caret_ct = 1;
+        edit.carets[0].anchor = edit.carets[0].caret;
+    }
+    edit.ctrl_d_active = false;
+    edit.block = false;
+}
+
+/// Ctrl+Shift+L: select all exact occurrences of primary selection / word.
+pub fn selectAllOccurrences(edit: *Edit, text: []const u8) void {
+    const p = &edit.carets[0];
+    if (!p.hasSel()) {
+        const w = wordAt(text, p.caret);
+        if (w.start >= w.end) return;
+        p.anchor = w.start;
+        p.caret = w.end;
+    }
+    const needle = text[p.lo()..p.hi()];
+    if (needle.len == 0) return;
+    const whole = isWholeWordBoundary(text, p.lo(), p.hi());
+    edit.caret_ct = 0;
+    var start: usize = 0;
+    while (findNextMatch(text, needle, start, whole)) |m| {
+        if (edit.caret_ct >= MaxCarets) break;
+        edit.carets[edit.caret_ct] = .{ .anchor = m.start, .caret = m.end };
+        edit.caret_ct += 1;
+        start = m.end;
+    }
+    if (edit.caret_ct == 0) edit.caret_ct = 1;
+    edit.ctrl_d_active = true;
 }
 
 fn copyText(edit: *Edit, text: []const u8, multiline: bool) []const u8 {
@@ -661,32 +747,49 @@ pub fn handleKeys(
             return edit.undo(buf, len);
         }
     }
+    if (input.keyPressed(.escape)) {
+        if (edit.caret_ct > 1 or edit.ctrl_d_active) {
+            collapseCarets(edit);
+            return false;
+        }
+    }
+    if (ctrl and shift and input.keyPressed(.l)) {
+        selectAllOccurrences(edit, text);
+        edit.coalesce_typing = false;
+        return false;
+    }
 
     if (input.keyPressed(.left)) {
         moveLeft(edit, text, shift, ctrl);
         edit.coalesce_typing = false;
+        edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.right)) {
         moveRight(edit, text, shift, ctrl);
         edit.coalesce_typing = false;
+        edit.ctrl_d_active = false;
     }
     if (multiline and input.keyPressed(.up)) {
         moveUp(edit, text, shift, alt and shift);
         edit.preferred_col = colOf(text, edit.carets[0].caret);
         edit.coalesce_typing = false;
+        if (!(alt and shift)) edit.ctrl_d_active = false;
     }
     if (multiline and input.keyPressed(.down)) {
         moveDown(edit, text, shift, alt and shift);
         edit.preferred_col = colOf(text, edit.carets[0].caret);
         edit.coalesce_typing = false;
+        if (!(alt and shift)) edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.home)) {
         moveHome(edit, text, shift, ctrl);
         edit.coalesce_typing = false;
+        edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.end)) {
         moveEnd(edit, text, shift, ctrl);
         edit.coalesce_typing = false;
+        edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.backspace)) {
         edit.beforeMutate(buf, len.*, false);
@@ -740,7 +843,8 @@ pub fn handleKeys(
     return changed;
 }
 
-/// Mouse down in field. Returns true if focus should be taken.
+/// Mouse down — only call on mousePressed (not release/clicked).
+/// 1st click: place caret · 2nd (within multi_click_s, same area): word · 3rd: line
 pub fn handleMouseDown(
     edit: *Edit,
     text: []const u8,
@@ -756,12 +860,15 @@ pub fn handleMouseDown(
     shift: bool,
 ) void {
     const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline);
+    const row = rowOf(text, pos);
+    const col = colOf(text, pos);
 
-    // click counting (1=caret, 2=word, 3=line) within multi_click window
+    // Multi-click: same line+col (±1 col) within debounce window
     const window = input_mod.config.multi_click_s;
-    if (now - edit.last_click_time < window and
-        @abs(@as(i64, @intCast(pos)) - @as(i64, @intCast(edit.last_click_pos))) <= 2)
-    {
+    const last_row = rowOf(text, edit.last_click_pos);
+    const last_col = colOf(text, edit.last_click_pos);
+    const same_spot = (row == last_row and @abs(@as(i64, @intCast(col)) - @as(i64, @intCast(last_col))) <= 1);
+    if (now - edit.last_click_time < window and same_spot) {
         edit.click_count = @min(edit.click_count + 1, 3);
     } else {
         edit.click_count = 1;
@@ -769,29 +876,36 @@ pub fn handleMouseDown(
     edit.last_click_time = now;
     edit.last_click_pos = pos;
     edit.coalesce_typing = false;
+    edit.ctrl_d_active = false;
 
     if (alt and shift and multiline) {
-        // block select start
         edit.block = true;
-        edit.block_row0 = rowOf(text, pos);
-        edit.block_row1 = edit.block_row0;
-        edit.block_col0 = colOf(text, pos);
-        edit.block_col1 = edit.block_col0;
+        edit.block_row0 = row;
+        edit.block_row1 = row;
+        edit.block_col0 = col;
+        edit.block_col1 = col;
         edit.carets[0] = .{ .caret = pos, .anchor = pos };
         edit.caret_ct = 1;
         edit.dragging = true;
         return;
     }
 
+    // Alt+click: add secondary caret (VS Code / JetBrains style)
+    if (alt and !shift and multiline) {
+        if (edit.caret_ct < MaxCarets) {
+            edit.carets[edit.caret_ct] = .{ .caret = pos, .anchor = pos };
+            edit.caret_ct += 1;
+        }
+        edit.dragging = false;
+        return;
+    }
+
     if (edit.click_count == 2) {
-        // word select
-        const ws = wordStart(text, pos);
-        const we = wordEnd(text, pos);
-        edit.carets[0] = .{ .anchor = ws, .caret = we };
+        const w = wordAt(text, pos);
+        edit.carets[0] = .{ .anchor = w.start, .caret = w.end };
         edit.caret_ct = 1;
-        edit.dragging = true;
+        edit.dragging = true; // double-click drag extends by word (simplified: free drag)
     } else if (edit.click_count >= 3 and multiline) {
-        // line select
         const ls = lineStart(text, pos);
         var le = lineEnd(text, pos);
         if (le < text.len and text[le] == '\n') le += 1;
@@ -799,14 +913,16 @@ pub fn handleMouseDown(
         edit.caret_ct = 1;
         edit.dragging = true;
     } else {
+        // click 1: place caret (or shift-extend)
         if (shift) {
             edit.carets[0].caret = pos;
+            edit.caret_ct = 1;
         } else {
             edit.carets[0] = .{ .caret = pos, .anchor = pos };
             edit.caret_ct = 1;
         }
         edit.dragging = true;
-        edit.preferred_col = colOf(text, pos);
+        edit.preferred_col = col;
     }
     edit.block = false;
 }
