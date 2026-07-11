@@ -106,9 +106,12 @@ fn trySceneHotkeys() void {
     // Ctrl+P → command palette (scene switching is via palette filters).
     if (g.input.keyPressed(.p)) {
         g.ui.palette_open = !g.ui.palette_open;
+        // Swallow typed 'p' / any buffered chars from this chord.
+        g.input.text_len = 0;
         if (g.ui.palette_open) {
             g.ui.palette_query_len = 0;
             g.ui.palette_sel = 0;
+            g.ui.palette_scroll = 0;
             g.ui.focus = .{};
             g.ui.menu_open = .{};
             g.ui.closeContextMenu();
@@ -154,16 +157,27 @@ export fn frame() void {
     sgl.loadIdentity();
     if (g.pip_alpha.id != 0) sgl.loadPipeline(g.pip_alpha);
 
-    g.ui.beginFrame(&g.input, &g.font, g.width, g.height, g.dt, g.time); // input is mutable for paste consume
-    trySceneHotkeys(); // after events for this frame have been delivered
+    g.input.now = g.time;
+    g.input.tickKeyRepeat();
+
+    g.ui.beginFrame(&g.input, &g.font, g.width, g.height, g.dt, g.time);
+    trySceneHotkeys();
     scenes.frame(&g);
     g.ui.endFrame();
-    // Phase 8: UI builds a command list; Sokol/GL backend executes it.
     g.ui.flushDraw();
 
     sgl.draw();
     sg.endPass();
     sg.commit();
+
+    // Push any Ctrl+C/X copy requests to the system clipboard.
+    if (g.input.takeCopyRequest()) |s| {
+        var zbuf: [1025]u8 = undefined;
+        const n = @min(s.len, zbuf.len - 1);
+        @memcpy(zbuf[0..n], s[0..n]);
+        zbuf[n] = 0;
+        sapp.setClipboardString(zbuf[0..n :0]);
+    }
 
     // Esc: palette/modal may have consumed it; else clear focus; else quit.
     if (g.input.keyPressed(.escape) and !g.ui.consumed_escape) {

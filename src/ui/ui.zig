@@ -7,35 +7,16 @@ const font_mod = @import("../font.zig");
 const theme_mod = @import("theme.zig");
 const draw = @import("../draw.zig");
 const te = @import("text_edit.zig");
+const types = @import("types.zig");
+const components = @import("components/root.zig");
 
 pub const Theme = theme_mod.Theme;
-pub const Color = theme_mod.Color;
+pub const Color = types.Color;
 pub const Input = input_mod.Input;
 pub const Font = font_mod.Font;
 pub const TextEdit = te.Edit;
-
-pub const Id = struct {
-    a: u64 = 0,
-    b: u64 = 0,
-
-    pub fn eq(self: Id, o: Id) bool {
-        return self.a == o.a and self.b == o.b;
-    }
-    pub fn isNone(self: Id) bool {
-        return self.a == 0 and self.b == 0;
-    }
-};
-
-pub const Rect = struct {
-    x: f32 = 0,
-    y: f32 = 0,
-    w: f32 = 0,
-    h: f32 = 0,
-
-    pub fn contains(self: Rect, px: f32, py: f32) bool {
-        return px >= self.x and py >= self.y and px < self.x + self.w and py < self.y + self.h;
-    }
-};
+pub const Id = types.Id;
+pub const Rect = types.Rect;
 
 const LayoutNode = struct {
     kind: enum { free, vstack, hstack },
@@ -132,6 +113,7 @@ pub const Ui = struct {
     palette_query: [64]u8 = undefined,
     palette_query_len: usize = 0,
     palette_sel: usize = 0,
+    palette_scroll: usize = 0,
 
     /// Simple ring log for console panel.
     log_lines: [48][96]u8 = undefined,
@@ -171,7 +153,7 @@ pub const Ui = struct {
         self.inited = false;
     }
 
-    fn editState(self: *Ui, key: u64) *te.Edit {
+    pub fn editState(self: *Ui, key: u64) *te.Edit {
         const gop = self.edits.getOrPut(key) catch {
             // fallback static — shouldn't happen
             unreachable;
@@ -359,14 +341,14 @@ pub const Ui = struct {
         if (self.id_depth > 0) self.id_depth -= 1;
     }
 
-    fn remember(self: *Ui, i: Id, r: Rect) void {
+    pub fn remember(self: *Ui, i: Id, r: Rect) void {
         if (self.curr_count < MaxPrev) {
             self.curr_rects[self.curr_count] = .{ .id = i, .r = r };
             self.curr_count += 1;
         }
     }
 
-    fn prevRect(self: *const Ui, i: Id) ?Rect {
+    pub fn prevRect(self: *const Ui, i: Id) ?Rect {
         var n: usize = 0;
         while (n < self.prev_count) : (n += 1) {
             if (self.prev_rects[n].id.eq(i)) return self.prev_rects[n].r;
@@ -388,7 +370,7 @@ pub const Ui = struct {
         return null;
     }
 
-    fn top(self: *Ui) *LayoutNode {
+    pub fn top(self: *Ui) *LayoutNode {
         return &self.layout_stack[self.layout_depth - 1];
     }
 
@@ -683,15 +665,11 @@ pub const Ui = struct {
     // --- Widgets ------------------------------------------------------------
 
     pub fn spacer(self: *Ui, h: f32) void {
-        _ = self.alloc(0, h);
+        components.spacer.spacer(self, h);
     }
 
     pub fn label(self: *Ui, opts: struct { text: []const u8, color: ?Color = null, size: ?f32 = null }) void {
-        const size = opts.size orelse self.theme.font_size;
-        const color = opts.color orelse self.theme.text;
-        const m = self.font.measure(opts.text, size);
-        const r = self.alloc(m.w, @max(m.h, self.theme.row_h * 0.7));
-        self.drawText(r.x, r.y + 2, size, color, opts.text);
+        components.label.label(self, opts);
     }
 
     pub fn button(self: *Ui, opts: struct {
@@ -700,77 +678,15 @@ pub const Ui = struct {
         w: f32 = 0,
         disabled: bool = false,
     }) bool {
-        const i = self.id(opts.id);
-        const size = self.theme.font_size;
-        const m = self.font.measure(opts.label, size);
-        const bw = if (opts.w > 0) opts.w else @max(m.w + 24, 80);
-        const bh = self.theme.button_h;
-        const r = self.alloc(bw, bh);
-
-        const st = self.interact(i, r, opts.disabled);
-        const fill: Color = if (opts.disabled)
-            self.theme.button_disabled
-        else if (st.active)
-            self.theme.button_active
-        else if (st.hot)
-            self.theme.button_hot
-        else
-            self.theme.button;
-
-        self.drawRectBorder(r, fill, self.theme.panel_border, 1);
-        const tx = r.x + (r.w - m.w) * 0.5;
-        const ty = r.y + (r.h - m.h) * 0.5;
-        const tc: Color = if (opts.disabled) self.theme.text_dim else self.theme.text;
-        self.drawText(tx, ty, size, tc, opts.label);
-        return st.clicked;
+        return components.button.button(self, opts);
     }
 
     pub fn radio(self: *Ui, opts: struct { id: []const u8, label: []const u8, group: *u32, value: u32 }) bool {
-        const i = self.id(opts.id);
-        const box = 18.0;
-        const size = self.theme.font_size;
-        const m = self.font.measure(opts.label, size);
-        const r = self.alloc(box + 8 + m.w, self.theme.row_h);
-        const br = Rect{ .x = r.x, .y = r.y + (r.h - box) * 0.5, .w = box, .h = box };
-        const st = self.interact(i, r, false);
-        if (st.clicked) opts.group.* = opts.value;
-        const on = opts.group.* == opts.value;
-        self.drawRectBorder(br, self.theme.input_bg, self.theme.panel_border, 1);
-        if (on) {
-            const inset = 4;
-            self.drawRect(.{
-                .x = br.x + inset,
-                .y = br.y + inset,
-                .w = br.w - 2 * inset,
-                .h = br.h - 2 * inset,
-            }, self.theme.accent);
-        }
-        self.drawText(r.x + box + 8, r.y + (r.h - m.h) * 0.5, size, self.theme.text, opts.label);
-        return st.clicked;
+        return components.radio.radio(self, opts);
     }
 
     pub fn checkbox(self: *Ui, opts: struct { id: []const u8, label: []const u8, value: *bool }) bool {
-        const i = self.id(opts.id);
-        const box = 18.0;
-        const size = self.theme.font_size;
-        const m = self.font.measure(opts.label, size);
-        const r = self.alloc(box + 8 + m.w, self.theme.row_h);
-        const br = Rect{ .x = r.x, .y = r.y + (r.h - box) * 0.5, .w = box, .h = box };
-        const st = self.interact(i, r, false);
-        if (st.clicked) opts.value.* = !opts.value.*;
-
-        self.drawRectBorder(br, self.theme.input_bg, self.theme.panel_border, 1);
-        if (opts.value.*) {
-            const inset = 4;
-            self.drawRect(.{
-                .x = br.x + inset,
-                .y = br.y + inset,
-                .w = br.w - 2 * inset,
-                .h = br.h - 2 * inset,
-            }, self.theme.accent);
-        }
-        self.drawText(r.x + box + 8, r.y + (r.h - m.h) * 0.5, size, self.theme.text, opts.label);
-        return st.clicked;
+        return components.checkbox.checkbox(self, opts);
     }
 
     pub fn slider(self: *Ui, opts: struct {
@@ -781,36 +697,7 @@ pub const Ui = struct {
         max: f32 = 1,
         w: f32 = 200,
     }) bool {
-        const i = self.id(opts.id);
-        const size = self.theme.font_size;
-        _ = self.font.measure(opts.label, size);
-        const track_h = 8.0;
-        const row_h = self.theme.row_h + 8;
-        const r = self.alloc(opts.w, row_h);
-
-        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-
-        const track = Rect{ .x = r.x, .y = r.y + 16, .w = opts.w, .h = track_h };
-        const st = self.interact(i, track, false);
-        var changed = false;
-        if (st.active and self.input.mouseDown(.left)) {
-            const t = std.math.clamp((self.input.mouse_x - track.x) / track.w, 0, 1);
-            const nv = opts.min + t * (opts.max - opts.min);
-            if (nv != opts.value.*) {
-                opts.value.* = nv;
-                changed = true;
-            }
-        }
-        const t = if (opts.max > opts.min) (opts.value.* - opts.min) / (opts.max - opts.min) else 0;
-        self.drawRect(track, self.theme.slider_track);
-        self.drawRect(.{ .x = track.x, .y = track.y, .w = track.w * t, .h = track.h }, self.theme.slider_fill);
-        const knob_x = track.x + track.w * t - 5;
-        self.drawRect(.{ .x = knob_x, .y = track.y - 4, .w = 10, .h = track_h + 8 }, if (st.hot or st.active) self.theme.accent_hot else self.theme.accent);
-
-        var buf: [32]u8 = undefined;
-        const val_s = std.fmt.bufPrint(&buf, "{d:.2}", .{opts.value.*}) catch "?";
-        self.drawText(track.x + track.w + 8, track.y - 2, size, self.theme.text_dim, val_s);
-        return changed;
+        return components.slider.slider(self, opts);
     }
 
     pub fn textInput(self: *Ui, opts: struct {
@@ -820,20 +707,7 @@ pub const Ui = struct {
         len: *usize,
         w: f32 = 220,
     }) bool {
-        const i = self.id(opts.id);
-        const size = self.theme.font_size;
-        const label_gap: f32 = 6;
-        const r = self.alloc(opts.w, self.theme.row_h + 14 + label_gap);
-        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = opts.w, .h = self.theme.row_h };
-        return self.textFieldCore(.{
-            .id_key = i.a,
-            .box = box,
-            .buf = opts.buf,
-            .len = opts.len,
-            .multiline = false,
-            .size = size,
-        });
+        return components.textInput.textInput(self, opts);
     }
 
     /// Multi-line text area.
@@ -851,53 +725,7 @@ pub const Ui = struct {
         max_height: f32 = 0,
         h: f32 = 0, // legacy explicit height; if >0 used as min
     }) bool {
-        const i = self.id(opts.id);
-        const size = self.theme.font_size;
-        const lh = self.font.lineHeight(size);
-        const label_gap: f32 = 6;
-        var body_h: f32 = @as(f32, @floatFromInt(opts.rows)) * lh + 12;
-        if (opts.h > 0) body_h = opts.h;
-        if (opts.min_height > 0) body_h = @max(body_h, opts.min_height);
-        const max_h = if (opts.max_height > 0) opts.max_height else body_h * 3;
-        // content height
-        const text = opts.buf[0..opts.len.*];
-        var nlines: usize = 1;
-        for (text) |ch| {
-            if (ch == '\n') nlines += 1;
-        }
-        const content_h = @as(f32, @floatFromInt(nlines)) * lh + 12;
-        const view_h = @min(max_h, @max(body_h, @min(content_h, max_h)));
-        const need_scroll = content_h > view_h;
-
-        const r = self.alloc(opts.w, view_h + 14 + label_gap);
-        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = opts.w, .h = view_h };
-
-        // scroll offset for overflow
-        var scroll: f32 = 0;
-        if (need_scroll) {
-            const gop = self.scroll_y.getOrPut(i.a) catch null;
-            if (gop) |g| {
-                if (!g.found_existing) g.value_ptr.* = 0;
-                if (box.contains(self.input.mouse_x, self.input.mouse_y)) {
-                    g.value_ptr.* -= self.input.scroll_y * lh;
-                }
-                const max_scroll = content_h - view_h + 4;
-                if (g.value_ptr.* < 0) g.value_ptr.* = 0;
-                if (g.value_ptr.* > max_scroll) g.value_ptr.* = max_scroll;
-                scroll = g.value_ptr.*;
-            }
-        }
-
-        return self.textFieldCore(.{
-            .id_key = i.a,
-            .box = box,
-            .buf = opts.buf,
-            .len = opts.len,
-            .multiline = true,
-            .size = size,
-            .scroll_y = scroll,
-        });
+        return components.textArea.textArea(self, opts);
     }
 
     fn textFieldCore(self: *Ui, opts: struct {
@@ -909,107 +737,7 @@ pub const Ui = struct {
         size: f32,
         scroll_y: f32 = 0,
     }) bool {
-        const box = opts.box;
-        const i = Id{ .a = opts.id_key, .b = 0 };
-        const st = self.interact(i, box, false);
-        const ed = self.editState(opts.id_key);
-        ed.clampAll(opts.len.*);
-
-        if (st.clicked or (self.input.mousePressed(.left) and box.contains(self.input.mouse_x, self.input.mouse_y))) {
-            self.focus = i;
-            const ox = box.x + 6;
-            const oy = box.y + 4 - opts.scroll_y;
-            te.handleMouseDown(
-                ed,
-                opts.buf[0..opts.len.*],
-                self.font,
-                opts.size,
-                ox,
-                oy,
-                self.input.mouse_x,
-                self.input.mouse_y,
-                opts.multiline,
-                self.time,
-                self.input.alt,
-                self.input.shift,
-            );
-        }
-        const focused = self.focus.a == opts.id_key;
-        if (focused and self.input.mouseDown(.left) and ed.dragging) {
-            const ox = box.x + 6;
-            const oy = box.y + 4 - opts.scroll_y;
-            te.handleMouseDrag(ed, opts.buf[0..opts.len.*], self.font, opts.size, ox, oy, self.input.mouse_x, self.input.mouse_y, opts.multiline);
-        }
-        if (self.input.mouseReleased(.left)) te.handleMouseUp(ed);
-
-        self.drawRectBorder(box, self.theme.input_bg, if (focused) self.theme.accent else self.theme.panel_border, 1);
-
-        var changed = false;
-        if (focused) {
-            changed = te.handleKeys(ed, opts.buf, opts.len, self.input, opts.multiline);
-        }
-
-        self.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
-        const origin_x = box.x + 6;
-        const origin_y = box.y + 4 - opts.scroll_y;
-        const lh = self.font.lineHeight(opts.size);
-        const text = opts.buf[0..opts.len.*];
-
-        // selection highlight(s)
-        var ci: usize = 0;
-        while (ci < ed.caret_ct) : (ci += 1) {
-            const rg = ed.carets[ci];
-            if (!rg.hasSel()) continue;
-            // draw per-line selection
-            var p = rg.lo();
-            const hi = rg.hi();
-            while (p < hi) {
-                const ls = te.lineStart(text, p);
-                const le = te.lineEnd(text, p);
-                const seg_lo = @max(p, ls);
-                const seg_hi = @min(hi, le);
-                const row = te.rowOf(text, seg_lo);
-                const pre = text[ls..seg_lo];
-                const mid = text[seg_lo..seg_hi];
-                const x0 = origin_x + self.font.measure(pre, opts.size).w;
-                const w = self.font.measure(mid, opts.size).w;
-                const y0 = origin_y + @as(f32, @floatFromInt(row)) * lh;
-                self.drawRect(.{ .x = x0, .y = y0, .w = @max(w, 2), .h = lh }, .{ 0.25, 0.45, 0.35, 0.55 });
-                if (seg_hi >= le and hi > le) {
-                    p = le + 1;
-                } else break;
-            }
-        }
-
-        // text lines
-        var line_start: usize = 0;
-        var li: usize = 0;
-        var line_i: usize = 0;
-        while (li <= text.len) : (li += 1) {
-            if (li == text.len or text[li] == '\n') {
-                const line = text[line_start..li];
-                const ly = origin_y + @as(f32, @floatFromInt(line_i)) * lh;
-                self.drawText(origin_x, ly, opts.size, self.theme.text, line);
-                line_i += 1;
-                line_start = li + 1;
-            }
-        }
-
-        // carets
-        if (focused and @mod(@as(i64, @intFromFloat(self.time * 2)), 2) == 0) {
-            ci = 0;
-            while (ci < ed.caret_ct) : (ci += 1) {
-                const cpos = ed.carets[ci].caret;
-                const row = te.rowOf(text, cpos);
-                const ls = te.lineStart(text, cpos);
-                const pre = text[ls..cpos];
-                const cx = origin_x + self.font.measure(pre, opts.size).w;
-                const cy = origin_y + @as(f32, @floatFromInt(row)) * lh;
-                self.drawRect(.{ .x = cx, .y = cy, .w = 2, .h = lh }, self.theme.text);
-            }
-        }
-        self.cmds.push(.{ .scissor_pop = {} });
-        return changed;
+        return components.textFieldCore.textFieldCore(self, opts);
     }
 
     /// Console log panel (reads internal ring buffer).
@@ -1040,7 +768,6 @@ pub const Ui = struct {
     }) ?usize {
         if (!self.palette_open) return null;
 
-        // Dim (front layer)
         self.drawRectFront(.{ .x = 0, .y = 0, .w = self.width, .h = self.height }, self.theme.overlay);
 
         if (self.input.keyPressed(.escape)) {
@@ -1050,10 +777,27 @@ pub const Ui = struct {
         }
 
         const pw: f32 = @min(520, self.width - 40);
-        const max_vis: usize = 12;
+        const max_vis: usize = 10;
         const row_h = self.theme.row_h;
-        // Filter first so height fits matches
-        const q = self.palette_query[0..self.palette_query_len];
+        var q = self.palette_query[0..self.palette_query_len];
+        // Typing into query — consume so fields never see the chars.
+        if (self.input.text_len > 0) {
+            const avail = self.palette_query.len - self.palette_query_len;
+            const n = @min(avail, self.input.text_len);
+            @memcpy(self.palette_query[self.palette_query_len .. self.palette_query_len + n], self.input.text[0..n]);
+            self.palette_query_len += n;
+            self.palette_sel = 0;
+            self.palette_scroll = 0;
+            self.input.text_len = 0;
+            q = self.palette_query[0..self.palette_query_len];
+        }
+        if (self.input.keyPressed(.backspace) and self.palette_query_len > 0) {
+            self.palette_query_len -= 1;
+            self.palette_sel = 0;
+            self.palette_scroll = 0;
+            q = self.palette_query[0..self.palette_query_len];
+        }
+
         var matches: [64]usize = undefined;
         var mct: usize = 0;
         for (opts.items, 0..) |item, idx| {
@@ -1064,73 +808,82 @@ pub const Ui = struct {
                 }
             }
         }
-        // Keep stable order as provided (callers alphabetize).
-        const vis = @min(mct, max_vis);
-        const ph: f32 = row_h + 12 + @as(f32, @floatFromInt(@max(vis, 1))) * row_h + 16;
-        const px = (self.width - pw) * 0.5;
-        const py = self.height * 0.18;
-        const box = Rect{ .x = px, .y = py, .w = pw, .h = ph };
-        self.drawRectBorderFront(box, self.theme.modal, self.theme.accent, 2);
-        self.drawTextFront(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
-
-        const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
-        self.drawRectBorderFront(qbox, self.theme.input_bg, self.theme.accent, 1);
-        if (self.input.text_len > 0) {
-            const avail = self.palette_query.len - self.palette_query_len;
-            const n = @min(avail, self.input.text_len);
-            @memcpy(self.palette_query[self.palette_query_len .. self.palette_query_len + n], self.input.text[0..n]);
-            self.palette_query_len += n;
-            self.palette_sel = 0;
-        }
-        if (self.input.keyPressed(.backspace) and self.palette_query_len > 0) {
-            self.palette_query_len -= 1;
-            self.palette_sel = 0;
-        }
-        if (q.len == 0) {
-            self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter… e.g. scene");
-        } else {
-            self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
-        }
 
         if (mct == 0) {
+            const ph_empty: f32 = row_h + 12 + row_h + 16;
+            const box = Rect{ .x = (self.width - pw) * 0.5, .y = self.height * 0.18, .w = pw, .h = ph_empty };
+            self.drawRectBorderFront(box, self.theme.modal, self.theme.accent, 2);
+            self.drawTextFront(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
+            const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
+            self.drawRectBorderFront(qbox, self.theme.input_bg, self.theme.accent, 1);
+            if (q.len == 0)
+                self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter… e.g. scene")
+            else
+                self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
             self.drawTextFront(box.x + 12, qbox.y + row_h + 12, self.theme.font_size, self.theme.text_dim, "No matches");
             return null;
         }
-        if (self.palette_sel >= mct) self.palette_sel = mct - 1;
 
-        if (self.input.keyPressed(.down)) {
-            self.palette_sel = @min(self.palette_sel + 1, mct - 1);
-        }
-        if (self.input.keyPressed(.up)) {
-            if (self.palette_sel > 0) self.palette_sel -= 1;
-        }
+        if (self.palette_sel >= mct) self.palette_sel = mct - 1;
+        if (self.input.keyPressed(.down)) self.palette_sel = @min(self.palette_sel + 1, mct - 1);
+        if (self.input.keyPressed(.up) and self.palette_sel > 0) self.palette_sel -= 1;
+
+        const max_scroll = if (mct > max_vis) mct - max_vis else 0;
+        if (self.palette_sel < self.palette_scroll) self.palette_scroll = self.palette_sel;
+        if (self.palette_sel >= self.palette_scroll + max_vis)
+            self.palette_scroll = self.palette_sel + 1 - max_vis;
+        if (self.palette_scroll > max_scroll) self.palette_scroll = max_scroll;
+
+        const vis = @min(mct - self.palette_scroll, max_vis);
+        const ph: f32 = row_h + 12 + @as(f32, @floatFromInt(@max(vis, 1))) * row_h + 16;
+        const box = Rect{ .x = (self.width - pw) * 0.5, .y = self.height * 0.18, .w = pw, .h = ph };
+        self.drawRectBorderFront(box, self.theme.modal, self.theme.accent, 2);
+        self.drawTextFront(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
+        const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
+        self.drawRectBorderFront(qbox, self.theme.input_bg, self.theme.accent, 1);
+        if (q.len == 0)
+            self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter… e.g. scene")
+        else
+            self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
 
         const list_y = qbox.y + row_h + 8;
+        const list_h = @as(f32, @floatFromInt(vis)) * row_h;
+        const list_r = Rect{ .x = box.x + 12, .y = list_y, .w = pw - 24, .h = list_h };
+        if (list_r.contains(self.input.mouse_x, self.input.mouse_y) and self.input.scroll_y != 0) {
+            if (self.input.scroll_y > 0 and self.palette_scroll > 0) self.palette_scroll -= 1;
+            if (self.input.scroll_y < 0 and self.palette_scroll < max_scroll) self.palette_scroll += 1;
+        }
+
         var result: ?usize = null;
         var vi: usize = 0;
         while (vi < vis) : (vi += 1) {
-            const item_idx = matches[vi];
+            const match_i = self.palette_scroll + vi;
+            const item_idx = matches[match_i];
             const ir = Rect{
                 .x = box.x + 12,
                 .y = list_y + @as(f32, @floatFromInt(vi)) * row_h,
                 .w = pw - 24,
                 .h = row_h,
             };
-            const on = vi == self.palette_sel;
+            const on = match_i == self.palette_sel;
             if (on) self.drawRectFront(ir, self.theme.selected);
             self.drawTextFront(ir.x + 8, ir.y + 6, self.theme.font_size, if (on) self.theme.accent else self.theme.text, opts.items[item_idx]);
-            const st = self.interact(self.idFlat(opts.items[item_idx]), ir, false);
-            if (st.clicked) {
-                result = item_idx;
-            }
+            if (self.interact(self.idFlat(opts.items[item_idx]), ir, false).clicked) result = item_idx;
         }
 
-        if (self.input.keyPressed(.enter) and mct > 0) {
-            result = matches[self.palette_sel];
+        if (max_scroll > 0) {
+            const track = Rect{ .x = box.x + pw - 10, .y = list_y, .w = 4, .h = list_h };
+            self.drawRectFront(track, self.theme.slider_track);
+            const thumb_h = @max(12, list_h * @as(f32, @floatFromInt(vis)) / @as(f32, @floatFromInt(mct)));
+            const thumb_t = list_y + (list_h - thumb_h) * (@as(f32, @floatFromInt(self.palette_scroll)) / @as(f32, @floatFromInt(max_scroll)));
+            self.drawRectFront(.{ .x = track.x, .y = thumb_t, .w = 4, .h = thumb_h }, self.theme.accent);
         }
+
+        if (self.input.keyPressed(.enter) and mct > 0) result = matches[self.palette_sel];
         if (result != null) {
             self.palette_open = false;
             self.palette_query_len = 0;
+            self.palette_scroll = 0;
         }
         return result;
     }
@@ -1156,18 +909,11 @@ pub const Ui = struct {
     }
 
     pub fn progress(self: *Ui, opts: struct { label: []const u8, value: f32, w: f32 = 200 }) void {
-        const size = self.theme.font_size;
-        const r = self.alloc(opts.w, self.theme.row_h);
-        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const track = Rect{ .x = r.x, .y = r.y + 14, .w = opts.w, .h = 10 };
-        const t = std.math.clamp(opts.value, 0, 1);
-        self.drawRect(track, self.theme.slider_track);
-        self.drawRect(.{ .x = track.x, .y = track.y, .w = track.w * t, .h = track.h }, self.theme.slider_fill);
+        components.progress.progress(self, opts);
     }
 
     pub fn separator(self: *Ui) void {
-        const r = self.alloc(0, 8);
-        self.drawRect(.{ .x = r.x, .y = r.y + 3, .w = self.top().width - 2 * self.top().pad, .h = 1 }, self.theme.panel_border);
+        components.separator.separator(self);
     }
 
     /// Scrollable region with GPU scissor clip + wheel scroll when hovered.
@@ -1206,26 +952,7 @@ pub const Ui = struct {
 
     /// Toggle switch (checkbox alternative).
     pub fn toggle(self: *Ui, opts: struct { id: []const u8, label: []const u8, value: *bool }) bool {
-        const i = self.id(opts.id);
-        const track_w: f32 = 40;
-        const track_h: f32 = 20;
-        const size = self.theme.font_size;
-        const m = self.font.measure(opts.label, size);
-        const r = self.alloc(track_w + 8 + m.w, self.theme.row_h);
-        const tr = Rect{
-            .x = r.x,
-            .y = r.y + (r.h - track_h) * 0.5,
-            .w = track_w,
-            .h = track_h,
-        };
-        const st = self.interact(i, r, false);
-        if (st.clicked) opts.value.* = !opts.value.*;
-        const fill: Color = if (opts.value.*) self.theme.accent else self.theme.slider_track;
-        self.drawRectBorder(tr, fill, self.theme.panel_border, 1);
-        const knob_x = if (opts.value.*) tr.x + tr.w - track_h + 2 else tr.x + 2;
-        self.drawRect(.{ .x = knob_x, .y = tr.y + 2, .w = track_h - 4, .h = track_h - 4 }, self.theme.text);
-        self.drawText(r.x + track_w + 8, r.y + (r.h - m.h) * 0.5, size, self.theme.text, opts.label);
-        return st.clicked;
+        return components.toggle.toggle(self, opts);
     }
 
     /// Dropdown / select. `open` and `selected` are app-owned persistent state.
@@ -1237,58 +964,7 @@ pub const Ui = struct {
         open: *bool,
         w: f32 = 200,
     }) bool {
-        const i = self.id(opts.id);
-        const size = self.theme.font_size;
-        const r = self.alloc(opts.w, self.theme.row_h + 14);
-        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const box = Rect{ .x = r.x, .y = r.y + 12, .w = opts.w, .h = self.theme.row_h };
-        const st = self.interact(i, box, false);
-        if (st.clicked) opts.open.* = !opts.open.*;
-
-        const sel = if (opts.selected.* < opts.items.len) opts.items[opts.selected.*] else "(none)";
-        self.drawRectBorder(box, self.theme.input_bg, if (opts.open.*) self.theme.accent else self.theme.panel_border, 1);
-        self.drawText(box.x + 6, box.y + 6, size, self.theme.text, sel);
-        self.drawText(box.x + box.w - 18, box.y + 6, size, self.theme.text_dim, if (opts.open.*) "^" else "v");
-
-        var changed = false;
-        if (opts.open.*) {
-            const item_h = self.theme.row_h;
-            const menu = Rect{
-                .x = box.x,
-                .y = box.y + box.h,
-                .w = box.w,
-                .h = item_h * @as(f32, @floatFromInt(opts.items.len)),
-            };
-            self.drawRectBorder(menu, self.theme.panel, self.theme.panel_border, 1);
-            for (opts.items, 0..) |item, idx| {
-                const ir = Rect{
-                    .x = menu.x,
-                    .y = menu.y + @as(f32, @floatFromInt(idx)) * item_h,
-                    .w = menu.w,
-                    .h = item_h,
-                };
-                var id_buf: [64]u8 = undefined;
-                const iid_s = std.fmt.bufPrint(&id_buf, "{s}#{d}", .{ opts.id, idx }) catch "dd";
-                const iid = self.id(iid_s);
-                const ist = self.interact(iid, ir, false);
-                if (ist.hot or opts.selected.* == idx) {
-                    self.drawRect(ir, if (opts.selected.* == idx) self.theme.selected else self.theme.button_hot);
-                }
-                self.drawText(ir.x + 6, ir.y + 6, size, self.theme.text, item);
-                if (ist.clicked) {
-                    opts.selected.* = idx;
-                    opts.open.* = false;
-                    changed = true;
-                }
-            }
-            // Click outside closes (if not over menu/box).
-            if (self.input.mousePressed(.left)) {
-                const over = box.contains(self.input.mouse_x, self.input.mouse_y) or
-                    menu.contains(self.input.mouse_x, self.input.mouse_y);
-                if (!over) opts.open.* = false;
-            }
-        }
-        return changed;
+        return components.dropdown.dropdown(self, opts);
     }
 
     /// Horizontal tab bar. Returns true if selection changed.
@@ -1298,33 +974,7 @@ pub const Ui = struct {
         selected: *usize,
         w: f32 = 0,
     }) bool {
-        const bar_w = if (opts.w > 0) opts.w else self.top().width - 2 * self.top().pad;
-        const r = self.alloc(bar_w, self.theme.row_h + 4);
-        const n: f32 = @floatFromInt(@max(opts.items.len, 1));
-        const tw = bar_w / n;
-        var changed = false;
-        self.pushId(opts.id);
-        defer self.popId();
-        for (opts.items, 0..) |item, idx| {
-            const tr = Rect{
-                .x = r.x + @as(f32, @floatFromInt(idx)) * tw,
-                .y = r.y,
-                .w = tw - 2,
-                .h = r.h,
-            };
-            const tid = self.id(item);
-            const st = self.interact(tid, tr, false);
-            const on = opts.selected.* == idx;
-            const fill: Color = if (on) self.theme.selected else if (st.hot) self.theme.button_hot else self.theme.button;
-            self.drawRectBorder(tr, fill, self.theme.panel_border, 1);
-            const m = self.font.measure(item, self.theme.font_size);
-            self.drawText(tr.x + (tr.w - m.w) * 0.5, tr.y + (tr.h - m.h) * 0.5, self.theme.font_size, if (on) self.theme.accent else self.theme.text, item);
-            if (st.clicked) {
-                opts.selected.* = idx;
-                changed = true;
-            }
-        }
-        return changed;
+        return components.tabs.tabs(self, opts);
     }
 
     /// Collapsible section header. Returns true while expanded (draw children inside).
@@ -1531,46 +1181,12 @@ pub const Ui = struct {
         w: f32 = 200,
         h: f32 = 160,
     }) bool {
-        const i = self.id(opts.id);
-        const r = self.alloc(opts.w, opts.h);
-        self.remember(i, r);
-        self.drawRectBorder(r, self.theme.input_bg, self.theme.panel_border, 1);
-        var changed = false;
-        const item_h = self.theme.row_h - 4;
-        self.pushId(opts.id);
-        defer self.popId();
-        self.cmds.push(.{ .scissor_push = .{ .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 } });
-        for (opts.items, 0..) |item, idx| {
-            const ir = Rect{
-                .x = r.x + 2,
-                .y = r.y + 2 + @as(f32, @floatFromInt(idx)) * item_h,
-                .w = r.w - 4,
-                .h = item_h,
-            };
-            const iid = self.id(item);
-            const st = self.interact(iid, ir, false);
-            const on = opts.selected.* == idx;
-            if (on or st.hot) {
-                self.drawRect(ir, if (on) self.theme.selected else self.theme.button_hot);
-            }
-            self.drawText(ir.x + 6, ir.y + 5, self.theme.font_size, self.theme.text, item);
-            if (st.clicked) {
-                opts.selected.* = idx;
-                changed = true;
-            }
-        }
-        self.cmds.push(.{ .scissor_pop = {} });
-        return changed;
+        return components.listBox.listBox(self, opts);
     }
 
     /// Color swatch button (shows color; returns true on click).
     pub fn colorSwatch(self: *Ui, opts: struct { id: []const u8, color: Color, selected: bool = false, w: f32 = 28 }) bool {
-        const r = self.alloc(opts.w, opts.w);
-        const i = self.id(opts.id);
-        const st = self.interact(i, r, false);
-        const border: Color = if (opts.selected or st.hot) self.theme.accent else self.theme.panel_border;
-        self.drawRectBorder(r, opts.color, border, if (opts.selected) 2 else 1);
-        return st.clicked;
+        return components.colorSwatch.colorSwatch(self, opts);
     }
 
     /// Number spinner (float) with − / + buttons.
@@ -1583,45 +1199,7 @@ pub const Ui = struct {
         step: f32 = 1,
         w: f32 = 160,
     }) bool {
-        const size = self.theme.font_size;
-        const r = self.alloc(opts.w, self.theme.row_h + 12);
-        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const row_y = r.y + 12;
-        const bh = self.theme.button_h - 4;
-        const bw: f32 = 28;
-        var changed = false;
-
-        self.pushId(opts.id);
-        defer self.popId();
-
-        const minus_r = Rect{ .x = r.x, .y = row_y, .w = bw, .h = bh };
-        const plus_r = Rect{ .x = r.x + opts.w - bw, .y = row_y, .w = bw, .h = bh };
-        const mid = Rect{ .x = r.x + bw + 4, .y = row_y, .w = opts.w - 2 * bw - 8, .h = bh };
-
-        const mi = self.id("minus");
-        const pi = self.id("plus");
-        const mst = self.interact(mi, minus_r, false);
-        const pst = self.interact(pi, plus_r, false);
-        self.drawRectBorder(minus_r, if (mst.hot) self.theme.button_hot else self.theme.button, self.theme.panel_border, 1);
-        self.drawRectBorder(plus_r, if (pst.hot) self.theme.button_hot else self.theme.button, self.theme.panel_border, 1);
-        self.drawText(minus_r.x + 10, minus_r.y + 5, size, self.theme.text, "-");
-        self.drawText(plus_r.x + 10, plus_r.y + 5, size, self.theme.text, "+");
-        self.drawRectBorder(mid, self.theme.input_bg, self.theme.panel_border, 1);
-
-        if (mst.clicked) {
-            opts.value.* = @max(opts.min, opts.value.* - opts.step);
-            changed = true;
-        }
-        if (pst.clicked) {
-            opts.value.* = @min(opts.max, opts.value.* + opts.step);
-            changed = true;
-        }
-
-        var buf: [32]u8 = undefined;
-        const s = std.fmt.bufPrint(&buf, "{d:.2}", .{opts.value.*}) catch "?";
-        const sm = self.font.measure(s, size);
-        self.drawText(mid.x + (mid.w - sm.w) * 0.5, mid.y + 5, size, self.theme.text, s);
-        return changed;
+        return components.spinner.spinner(self, opts);
     }
 
     /// Horizontal form row: fixed-width label column + remaining content width.
@@ -1770,21 +1348,7 @@ pub const Ui = struct {
         placeholder: []const u8 = "Search…",
         w: f32 = 200,
     }) bool {
-        const i = self.id(opts.id);
-        const r = self.alloc(opts.w, self.theme.row_h);
-        const empty = opts.len.* == 0;
-        const changed = self.textFieldCore(.{
-            .id_key = i.a,
-            .box = r,
-            .buf = opts.buf,
-            .len = opts.len,
-            .multiline = false,
-            .size = self.theme.font_size,
-        });
-        if (empty and opts.len.* == 0 and self.focus.a != i.a) {
-            self.drawText(r.x + 6, r.y + 6, self.theme.font_size, self.theme.text_dim, opts.placeholder);
-        }
-        return changed;
+        return components.searchField.searchField(self, opts);
     }
 
     /// List box with optional keyboard navigation when hovered/selected.
@@ -1795,29 +1359,7 @@ pub const Ui = struct {
         w: f32 = 200,
         h: f32 = 160,
     }) bool {
-        var changed = self.listBox(.{
-            .id = opts.id,
-            .items = opts.items,
-            .selected = opts.selected,
-            .w = opts.w,
-            .h = opts.h,
-        });
-        // Keyboard when list region is hot or has selection focus via hover.
-        const i = self.id(opts.id);
-        const r = self.prevRect(i) orelse return changed;
-        if (r.contains(self.input.mouse_x, self.input.mouse_y) or self.hot.eq(i)) {
-            if (opts.items.len > 0) {
-                if (self.input.keyPressed(.down)) {
-                    opts.selected.* = @min(opts.selected.* + 1, opts.items.len - 1);
-                    changed = true;
-                }
-                if (self.input.keyPressed(.up)) {
-                    if (opts.selected.* > 0) opts.selected.* -= 1;
-                    changed = true;
-                }
-            }
-        }
-        return changed;
+        return components.listBoxNav.listBoxNav(self, opts);
     }
 
     /// Simple selectable tree node (indent + expand arrow + label).

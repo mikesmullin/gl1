@@ -28,6 +28,16 @@ pub const Range = struct {
     }
 };
 
+pub const MaxUndo = 48;
+pub const MaxSnap = 512;
+
+pub const Snap = struct {
+    data: [MaxSnap]u8 = undefined,
+    len: usize = 0,
+    caret: usize = 0,
+    anchor: usize = 0,
+};
+
 pub const Edit = struct {
     /// Primary + multi-carets (index 0 is primary).
     carets: [MaxCarets]Range = @splat(.{}),
@@ -46,6 +56,12 @@ pub const Edit = struct {
     last_click_time: f64 = -1,
     last_click_pos: usize = 0,
     click_count: u8 = 0,
+    /// Undo/redo ring: snaps[0..undo_len], undo_at is current index (redo is ahead).
+    snaps: [MaxUndo]Snap = undefined,
+    undo_len: usize = 0,
+    undo_at: usize = 0,
+    /// Coalesce typing into one undo step until pause/nav.
+    coalesce_typing: bool = false,
 
     pub fn primary(self: *Edit) *Range {
         return &self.carets[0];
@@ -76,6 +92,70 @@ pub const Edit = struct {
             self.carets[i].caret = @min(self.carets[i].caret, len);
             self.carets[i].anchor = @min(self.carets[i].anchor, len);
         }
+    }
+
+    pub fn pushUndo(self: *Edit, buf: []const u8, len: usize) void {
+        // Drop redo branch
+        self.undo_len = self.undo_at;
+        if (self.undo_len >= MaxUndo) {
+            // shift left
+            var i: usize = 0;
+            while (i + 1 < MaxUndo) : (i += 1) {
+                self.snaps[i] = self.snaps[i + 1];
+            }
+            self.undo_len = MaxUndo - 1;
+            self.undo_at = self.undo_len;
+        }
+        var s = &self.snaps[self.undo_len];
+        const n = @min(len, MaxSnap);
+        @memcpy(s.data[0..n], buf[0..n]);
+        s.len = n;
+        s.caret = self.carets[0].caret;
+        s.anchor = self.carets[0].anchor;
+        self.undo_len += 1;
+        self.undo_at = self.undo_len;
+    }
+
+    pub fn undo(self: *Edit, buf: []u8, len: *usize) bool {
+        if (self.undo_at == 0) return false;
+        // Save current as redo point if at tip
+        if (self.undo_at == self.undo_len and self.undo_len < MaxUndo) {
+            var s = &self.snaps[self.undo_len];
+            const n = @min(len.*, MaxSnap);
+            @memcpy(s.data[0..n], buf[0..n]);
+            s.len = n;
+            s.caret = self.carets[0].caret;
+            s.anchor = self.carets[0].anchor;
+            self.undo_len += 1;
+        }
+        self.undo_at -= 1;
+        const s = self.snaps[self.undo_at];
+        const n = @min(s.len, buf.len);
+        @memcpy(buf[0..n], s.data[0..n]);
+        len.* = n;
+        self.carets[0] = .{ .caret = @min(s.caret, n), .anchor = @min(s.anchor, n) };
+        self.caret_ct = 1;
+        self.coalesce_typing = false;
+        return true;
+    }
+
+    pub fn redo(self: *Edit, buf: []u8, len: *usize) bool {
+        if (self.undo_at + 1 >= self.undo_len) return false;
+        self.undo_at += 1;
+        const s = self.snaps[self.undo_at];
+        const n = @min(s.len, buf.len);
+        @memcpy(buf[0..n], s.data[0..n]);
+        len.* = n;
+        self.carets[0] = .{ .caret = @min(s.caret, n), .anchor = @min(s.anchor, n) };
+        self.caret_ct = 1;
+        self.coalesce_typing = false;
+        return true;
+    }
+
+    fn beforeMutate(self: *Edit, buf: []const u8, len: usize, typing: bool) void {
+        if (typing and self.coalesce_typing) return;
+        self.pushUndo(buf, len);
+        self.coalesce_typing = typing;
     }
 };
 
@@ -469,26 +549,33 @@ pub fn posFromPoint(
     return best;
 }
 
-/// Ctrl+D: select word under caret, or add next match as multi-caret.
+/// Ctrl+D:
+/// 1st: select word nearest caret (if no selection, or selection is not that word)
+/// 2nd+: add next identical match as multi-caret selection
 pub fn ctrlD(edit: *Edit, text: []const u8) void {
     const p = &edit.carets[0];
-    if (!p.hasSel()) {
-        // select word
-        const ws = wordStart(text, p.caret);
-        const we = wordEnd(text, p.caret);
-        if (ws < we) {
-            p.anchor = ws;
-            p.caret = we;
+    // Resolve word at caret
+    const ws = wordStart(text, if (p.caret < text.len) p.caret else p.caret);
+    const we = wordEnd(text, p.caret);
+    const word_ok = ws < we;
+
+    if (!p.hasSel() or edit.caret_ct == 1) {
+        // First press (or only primary caret): ensure word is selected
+        if (!p.hasSel() or (word_ok and !(p.lo() == ws and p.hi() == we))) {
+            if (word_ok) {
+                p.anchor = ws;
+                p.caret = we;
+                edit.caret_ct = 1;
+                return;
+            }
+            return;
         }
-        edit.caret_ct = 1;
-        return;
     }
-    // Find next match of selected text after last caret
+    // Subsequent: match next occurrence of primary selection text
     const sel_lo = p.lo();
     const sel_hi = p.hi();
     if (sel_lo >= sel_hi) return;
     const needle = text[sel_lo..sel_hi];
-    // search after the rightmost caret hi
     var start: usize = 0;
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
@@ -504,7 +591,20 @@ pub fn ctrlD(edit: *Edit, text: []const u8) void {
     }
 }
 
-/// Handle keyboard for an edit session. multiline enables enter/up/down/block.
+fn copyText(edit: *Edit, text: []const u8, multiline: bool) []const u8 {
+    const p = edit.carets[0];
+    if (p.hasSel()) {
+        return text[p.lo()..p.hi()];
+    }
+    // Nothing selected → current line (or whole buffer for single-line)
+    if (!multiline) return text;
+    const ls = lineStart(text, p.caret);
+    var le = lineEnd(text, p.caret);
+    if (le < text.len and text[le] == '\n') le += 1;
+    return text[ls..le];
+}
+
+/// Handle keyboard for an edit session. Only call when field is focused.
 pub fn handleKeys(
     edit: *Edit,
     buf: []u8,
@@ -518,45 +618,103 @@ pub fn handleKeys(
     const ctrl = input.ctrl;
     const alt = input.alt;
 
+    // Clipboard / select-all / undo (focused-only; caller gates focus)
+    if (ctrl and input.keyPressed(.a)) {
+        edit.carets[0] = .{ .anchor = 0, .caret = len.* };
+        edit.caret_ct = 1;
+        edit.coalesce_typing = false;
+        return false;
+    }
+    if (ctrl and input.keyPressed(.c)) {
+        input.requestCopy(copyText(edit, text, multiline));
+        return false;
+    }
+    if (ctrl and input.keyPressed(.x)) {
+        const slice = copyText(edit, text, multiline);
+        input.requestCopy(slice);
+        edit.beforeMutate(buf, len.*, false);
+        if (edit.carets[0].hasSel()) {
+            changed = deleteSelections(edit, buf, len) or changed;
+        } else if (multiline) {
+            // cut line
+            const ls = lineStart(text, edit.carets[0].caret);
+            var le = lineEnd(text, edit.carets[0].caret);
+            if (le < len.* and buf[le] == '\n') le += 1;
+            deleteRange(buf, len, ls, le);
+            edit.carets[0] = .{ .caret = ls, .anchor = ls };
+            edit.caret_ct = 1;
+            changed = true;
+        } else {
+            // single-line: cut all
+            len.* = 0;
+            edit.carets[0] = .{};
+            edit.caret_ct = 1;
+            changed = true;
+        }
+        edit.coalesce_typing = false;
+        return changed;
+    }
+    if (ctrl and input.keyPressed(.z)) {
+        if (shift) {
+            return edit.redo(buf, len);
+        } else {
+            return edit.undo(buf, len);
+        }
+    }
+
     if (input.keyPressed(.left)) {
         moveLeft(edit, text, shift, ctrl);
+        edit.coalesce_typing = false;
     }
     if (input.keyPressed(.right)) {
         moveRight(edit, text, shift, ctrl);
+        edit.coalesce_typing = false;
     }
     if (multiline and input.keyPressed(.up)) {
         moveUp(edit, text, shift, alt and shift);
         edit.preferred_col = colOf(text, edit.carets[0].caret);
+        edit.coalesce_typing = false;
     }
     if (multiline and input.keyPressed(.down)) {
         moveDown(edit, text, shift, alt and shift);
         edit.preferred_col = colOf(text, edit.carets[0].caret);
+        edit.coalesce_typing = false;
     }
     if (input.keyPressed(.home)) {
         moveHome(edit, text, shift, ctrl);
+        edit.coalesce_typing = false;
     }
     if (input.keyPressed(.end)) {
         moveEnd(edit, text, shift, ctrl);
+        edit.coalesce_typing = false;
     }
     if (input.keyPressed(.backspace)) {
+        edit.beforeMutate(buf, len.*, false);
         changed = backspace(edit, buf, len) or changed;
+        edit.coalesce_typing = false;
     }
     if (input.keyPressed(.delete)) {
+        edit.beforeMutate(buf, len.*, false);
         changed = deleteForward(edit, buf, len) or changed;
+        edit.coalesce_typing = false;
     }
-    if (ctrl and input.keyPressed(.d) and multiline) {
+    // Ctrl+D works on single- and multi-line
+    if (ctrl and input.keyPressed(.d)) {
         ctrlD(edit, buf[0..len.*]);
+        edit.coalesce_typing = false;
     }
     if (multiline and input.keyPressed(.enter)) {
+        edit.beforeMutate(buf, len.*, false);
         changed = insertText(edit, buf, len, "\n") or changed;
+        edit.coalesce_typing = false;
     }
 
-    // Typed chars (skip when ctrl held, except we already handled ctrl+d)
+    // Typed chars (Ctrl chars never reach text[] thanks to input filter)
     if (!ctrl and input.text_len > 0) {
+        edit.beforeMutate(buf, len.*, true);
         changed = insertText(edit, buf, len, input.text[0..input.text_len]) or changed;
     }
     if (input.paste_len > 0) {
-        // filter paste
         var tmp: [512]u8 = undefined;
         var n: usize = 0;
         for (input.paste[0..input.paste_len]) |ch| {
@@ -570,8 +728,12 @@ pub fn handleKeys(
                 n += 1;
             }
         }
-        if (n > 0) changed = insertText(edit, buf, len, tmp[0..n]) or changed;
+        if (n > 0) {
+            edit.beforeMutate(buf, len.*, false);
+            changed = insertText(edit, buf, len, tmp[0..n]) or changed;
+        }
         input.paste_len = 0;
+        edit.coalesce_typing = false;
     }
 
     edit.clampAll(len.*);
@@ -595,14 +757,18 @@ pub fn handleMouseDown(
 ) void {
     const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline);
 
-    // click counting
-    if (now - edit.last_click_time < 0.4 and @abs(@as(i64, @intCast(pos)) - @as(i64, @intCast(edit.last_click_pos))) < 2) {
+    // click counting (1=caret, 2=word, 3=line) within multi_click window
+    const window = input_mod.config.multi_click_s;
+    if (now - edit.last_click_time < window and
+        @abs(@as(i64, @intCast(pos)) - @as(i64, @intCast(edit.last_click_pos))) <= 2)
+    {
         edit.click_count = @min(edit.click_count + 1, 3);
     } else {
         edit.click_count = 1;
     }
     edit.last_click_time = now;
     edit.last_click_pos = pos;
+    edit.coalesce_typing = false;
 
     if (alt and shift and multiline) {
         // block select start

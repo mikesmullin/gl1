@@ -1,5 +1,7 @@
 //! Normalized input snapshot for UI + scenes.
+//! Includes software key-repeat (configurable delay/rate).
 
+const std = @import("std");
 const sokol = @import("sokol");
 const sapp = sokol.app;
 
@@ -27,6 +29,8 @@ pub const Key = enum {
     n,
     c,
     v,
+    x,
+    z,
     one,
     two,
     three,
@@ -40,6 +44,18 @@ pub const Key = enum {
 };
 
 pub const MouseButton = enum { left, right, middle };
+
+/// Global input timing knobs (seconds).
+pub const Config = struct {
+    /// Delay before first software repeat after key down.
+    key_repeat_delay_s: f64 = 0.240,
+    /// Interval between subsequent software repeats.
+    key_repeat_rate_s: f64 = 0.060,
+    /// Multi-click chain window (double/triple click).
+    multi_click_s: f64 = 0.120,
+};
+
+pub var config: Config = .{};
 
 pub const Input = struct {
     mouse_x: f32 = 0,
@@ -56,7 +72,10 @@ pub const Input = struct {
     keys_pressed: std.EnumArray(Key, bool) = std.EnumArray(Key, bool).initFill(false),
     keys_released: std.EnumArray(Key, bool) = std.EnumArray(Key, bool).initFill(false),
 
-    /// UTF-8 chars typed this frame (for text fields).
+    /// Next software-repeat fire time per key (-1 = not held / not scheduled).
+    key_repeat_at: std.EnumArray(Key, f64) = std.EnumArray(Key, f64).initFill(-1),
+
+    /// UTF-8 chars typed this frame (for text fields). Ctrl/Alt chars are blocked.
     text: [32]u8 = undefined,
     text_len: usize = 0,
 
@@ -64,13 +83,17 @@ pub const Input = struct {
     paste: [512]u8 = undefined,
     paste_len: usize = 0,
 
-    /// Modifier state (updated from key events).
+    /// Copy buffer for Ctrl+C/X → sokol clipboard (set by text fields).
+    copy_request: [1024]u8 = undefined,
+    copy_request_len: usize = 0,
+
     shift: bool = false,
     ctrl: bool = false,
     alt: bool = false,
     super: bool = false,
 
-    const std = @import("std");
+    /// Seconds, updated by app each frame before UI.
+    now: f64 = 0,
 
     pub fn beginFrame(self: *Input) void {
         self.mouse_dx = 0;
@@ -81,8 +104,28 @@ pub const Input = struct {
         self.keys_pressed = std.EnumArray(Key, bool).initFill(false);
         self.keys_released = std.EnumArray(Key, bool).initFill(false);
         self.text_len = 0;
-        self.paste_len = 0;
-        // shift/ctrl/alt kept sticky across frames from key down/up
+        // paste_len cleared when consumed by text edit; don't wipe if set this frame mid-event
+        // copy_request consumed by app after UI
+    }
+
+    /// Call once per frame after `now` is set and events have been processed.
+    pub fn tickKeyRepeat(self: *Input) void {
+        // Explicit list — software repeat for navigation/editing keys.
+        const repeatable = [_]Key{
+            .backspace, .delete, .left, .right, .up, .down, .home, .end,
+            .enter,     .space,  .tab,
+        };
+        for (repeatable) |k| {
+            if (self.keys_down.get(k)) {
+                const at = self.key_repeat_at.get(k);
+                if (at >= 0 and self.now >= at) {
+                    self.keys_pressed.set(k, true);
+                    self.key_repeat_at.set(k, self.now + config.key_repeat_rate_s);
+                }
+            } else {
+                self.key_repeat_at.set(k, -1);
+            }
+        }
     }
 
     pub fn pushPaste(self: *Input, s: []const u8) void {
@@ -91,9 +134,16 @@ pub const Input = struct {
         self.paste_len = n;
     }
 
-    pub fn takePaste(self: *Input) []const u8 {
-        const out = self.paste[0..self.paste_len];
-        self.paste_len = 0;
+    pub fn requestCopy(self: *Input, s: []const u8) void {
+        const n = @min(s.len, self.copy_request.len);
+        @memcpy(self.copy_request[0..n], s[0..n]);
+        self.copy_request_len = n;
+    }
+
+    pub fn takeCopyRequest(self: *Input) ?[]const u8 {
+        if (self.copy_request_len == 0) return null;
+        const out = self.copy_request[0..self.copy_request_len];
+        self.copy_request_len = 0;
         return out;
     }
 
@@ -115,7 +165,6 @@ pub const Input = struct {
 
     pub fn handleEvent(self: *Input, ev: [*c]const sapp.Event) void {
         const e = ev.*;
-        // Keep modifiers current on every event that carries them.
         self.shift = (e.modifiers & sapp.modifier_shift) != 0;
         self.ctrl = (e.modifiers & sapp.modifier_ctrl) != 0;
         self.alt = (e.modifiers & sapp.modifier_alt) != 0;
@@ -149,6 +198,8 @@ pub const Input = struct {
                 if (mapKey(e.key_code)) |k| {
                     if (!e.key_repeat) {
                         self.keys_pressed.set(k, true);
+                        // First software repeat after delay (sapp may also auto-repeat; we gate CHAR separately).
+                        self.key_repeat_at.set(k, self.now + config.key_repeat_delay_s);
                     }
                     self.keys_down.set(k, true);
                 }
@@ -157,9 +208,12 @@ pub const Input = struct {
                 if (mapKey(e.key_code)) |k| {
                     self.keys_down.set(k, false);
                     self.keys_released.set(k, true);
+                    self.key_repeat_at.set(k, -1);
                 }
             },
             .CHAR => {
+                // Never type into fields while Ctrl/Alt/Super held (blocks Ctrl+P leaking 'p').
+                if (self.ctrl or self.alt or self.super) return;
                 if (e.char_code >= 32 and e.char_code < 127) {
                     if (self.text_len < self.text.len) {
                         self.text[self.text_len] = @intCast(e.char_code);
@@ -205,6 +259,8 @@ pub const Input = struct {
             .N => .n,
             .C => .c,
             .V => .v,
+            .X => .x,
+            .Z => .z,
             ._1 => .one,
             ._2 => .two,
             ._3 => .three,
