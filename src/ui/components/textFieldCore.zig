@@ -13,6 +13,9 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     const ed = ui.editState(opts.id_key);
     ed.clampAll(opts.len.*);
 
+    // Content width inside padding (6px left + ~6px right). Soft wrap is display-only.
+    const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
+
     // Only on press — never on release (`st.clicked`), so multi-click counting stays correct.
     if (ui.input.mousePressed(.left) and box.contains(ui.input.mouse_x, ui.input.mouse_y)) {
         ui.focus = i;
@@ -28,6 +31,7 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
             ui.input.mouse_x,
             ui.input.mouse_y,
             opts.multiline,
+            wrap_px,
             ui.time,
             ui.input.alt,
             ui.input.shift,
@@ -38,24 +42,24 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     if (focused and ui.input.mouseDown(.left) and ed.dragging) {
         const ox = box.x + 6;
         const oy = box.y + 4 - opts.scroll_y;
-        te.handleMouseDrag(ed, opts.buf[0..opts.len.*], ui.font, opts.size, ox, oy, ui.input.mouse_x, ui.input.mouse_y, opts.multiline);
+        te.handleMouseDrag(
+            ed,
+            opts.buf[0..opts.len.*],
+            ui.font,
+            opts.size,
+            ox,
+            oy,
+            ui.input.mouse_x,
+            ui.input.mouse_y,
+            opts.multiline,
+            wrap_px,
+        );
     }
     if (ui.input.mouseReleased(.left)) te.handleMouseUp(ed);
 
     ui.drawRectBorder(box, ui.theme.input_bg, if (focused) ui.theme.accent else ui.theme.panel_border, 1);
 
-    // Content width inside padding (6px left + ~6px right).
-    const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
-
     var changed = false;
-    // Hard-wrap whenever we know the field width — including the first frame
-    // (default buffer text) and after resize — not only after a key edit.
-    if (opts.multiline and wrap_px > 0) {
-        if (te.hardWrap(ed, opts.buf, opts.len, ui.font, opts.size, wrap_px)) {
-            changed = true;
-        }
-    }
-
     if (focused) {
         // Esc ending a Ctrl+D / multi-caret session should not also clear focus.
         if (ui.input.keyPressed(.escape) and (ed.ctrl_d_active or ed.caret_ct > 1)) {
@@ -70,7 +74,7 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
             wrap_px,
             ui.font,
             opts.size,
-        ) or changed;
+        );
     }
 
     ui.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
@@ -79,44 +83,40 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     const lh = ui.font.lineHeight(opts.size);
     const text = opts.buf[0..opts.len.*];
 
-    // selection highlight(s)
+    var rows_buf: [te.MaxSoftRows]te.VisualRow = undefined;
+    const nrows = te.layoutSoft(text, ui.font, opts.size, wrap_px, rows_buf[0..]);
+    const rows = rows_buf[0..nrows];
+
+    // selection highlight(s) — per soft visual row
     var ci: usize = 0;
     while (ci < ed.caret_ct) : (ci += 1) {
         const rg = ed.carets[ci];
         if (!rg.hasSel()) continue;
-        // draw per-line selection
-        var p = rg.lo();
-        const hi = rg.hi();
-        while (p < hi) {
-            const ls = te.lineStart(text, p);
-            const le = te.lineEnd(text, p);
-            const seg_lo = @max(p, ls);
-            const seg_hi = @min(hi, le);
-            const row = te.rowOf(text, seg_lo);
-            const pre = text[ls..seg_lo];
+        const sel_lo = rg.lo();
+        const sel_hi = rg.hi();
+        var sri: usize = 0;
+        while (sri < rows.len) : (sri += 1) {
+            const vr = rows[sri];
+            if (vr.end <= sel_lo or vr.start >= sel_hi) continue;
+            const seg_lo = @max(sel_lo, vr.start);
+            const seg_hi = @min(sel_hi, vr.end);
+            if (seg_lo >= seg_hi) continue;
+            const pre = text[vr.start..seg_lo];
             const mid = text[seg_lo..seg_hi];
             const x0 = origin_x + ui.font.measure(pre, opts.size).w;
             const w = ui.font.measure(mid, opts.size).w;
-            const y0 = origin_y + @as(f32, @floatFromInt(row)) * lh;
+            const y0 = origin_y + @as(f32, @floatFromInt(sri)) * lh;
             ui.drawRect(.{ .x = x0, .y = y0, .w = @max(w, 2), .h = lh }, .{ 0.25, 0.45, 0.35, 0.55 });
-            if (seg_hi >= le and hi > le) {
-                p = le + 1;
-            } else break;
         }
     }
 
-    // text lines
-    var line_start: usize = 0;
-    var li: usize = 0;
-    var line_i: usize = 0;
-    while (li <= text.len) : (li += 1) {
-        if (li == text.len or text[li] == '\n') {
-            const line = text[line_start..li];
-            const ly = origin_y + @as(f32, @floatFromInt(line_i)) * lh;
-            ui.drawText(origin_x, ly, opts.size, ui.theme.text, line);
-            line_i += 1;
-            line_start = li + 1;
-        }
+    // text: one draw per soft visual row
+    var ri: usize = 0;
+    while (ri < rows.len) : (ri += 1) {
+        const vr = rows[ri];
+        const line = text[vr.start..vr.end];
+        const ly = origin_y + @as(f32, @floatFromInt(ri)) * lh;
+        ui.drawText(origin_x, ly, opts.size, ui.theme.text, line);
     }
 
     // carets
@@ -124,11 +124,9 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
         ci = 0;
         while (ci < ed.caret_ct) : (ci += 1) {
             const cpos = ed.carets[ci].caret;
-            const row = te.rowOf(text, cpos);
-            const ls = te.lineStart(text, cpos);
-            const pre = text[ls..cpos];
-            const cx = origin_x + ui.font.measure(pre, opts.size).w;
-            const cy = origin_y + @as(f32, @floatFromInt(row)) * lh;
+            const cp = te.caretDrawPos(text, ui.font, opts.size, cpos, rows);
+            const cx = origin_x + cp.x;
+            const cy = origin_y + @as(f32, @floatFromInt(cp.row)) * lh;
             ui.drawRect(.{ .x = cx, .y = cy, .w = 2, .h = lh }, ui.theme.text);
         }
     }

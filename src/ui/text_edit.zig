@@ -461,98 +461,151 @@ pub fn deleteForward(edit: *Edit, buf: []u8, len: *usize) bool {
     return changed;
 }
 
-/// Hard word-wrap so no line measures wider than `max_px`. Prefer breaks at spaces.
-/// Remaps carets approximately via an old→new index map.
-pub fn hardWrap(
-    edit: *Edit,
-    buf: []u8,
-    len: *usize,
+// --- soft wrap (display only; never mutates buffer) --------------------------
+
+/// One visual row after soft-wrapping. `[start, end)` indexes the original text.
+/// Soft wrap does not insert `\n` into the buffer — only real Enter does.
+pub const VisualRow = struct {
+    start: usize,
+    end: usize,
+};
+
+pub const MaxSoftRows = MaxSnap;
+
+/// Layout `text` into visual rows. When `max_px` > 0, long hard-lines break at
+/// spaces (or mid-word if needed). Original bytes are never modified.
+pub fn layoutSoft(
+    text: []const u8,
     font: *const Font,
     size: f32,
     max_px: f32,
-) bool {
-    if (max_px < 16 or len.* == 0) return false;
-    const old_len = len.*;
-    if (old_len > MaxSnap) return false;
+    out: []VisualRow,
+) usize {
+    if (out.len == 0) return 0;
+    var count: usize = 0;
 
-    var out: [MaxSnap]u8 = undefined;
-    var map: [MaxSnap + 1]usize = undefined;
-    // Default identity so any unvisited index stays safe.
-    {
-        var mi: usize = 0;
-        while (mi <= old_len) : (mi += 1) map[mi] = mi;
-    }
-    var o: usize = 0;
+    const wrap = max_px >= 16;
     var i: usize = 0;
+    // Always produce at least one row for empty text.
+    if (text.len == 0) {
+        out[0] = .{ .start = 0, .end = 0 };
+        return 1;
+    }
 
-    while (i < old_len) {
-        const para_end = lineEnd(buf[0..old_len], i); // up to (not including) existing \n
+    while (i <= text.len) {
+        const para_end = lineEnd(text, i);
         var line_start = i;
-        while (line_start < para_end) {
-            var last_good: usize = line_start;
-            var last_space: ?usize = null;
-            var j = line_start;
-            while (j < para_end) : (j += 1) {
-                if (buf[j] == ' ') last_space = j;
-                const w = font.measure(buf[line_start .. j + 1], size).w;
-                if (w <= max_px) {
-                    last_good = j + 1;
-                } else {
-                    break;
+
+        if (line_start == para_end) {
+            // Empty hard line (e.g. between \n\n or trailing newline content).
+            if (count < out.len) {
+                out[count] = .{ .start = line_start, .end = para_end };
+                count += 1;
+            }
+        } else if (!wrap) {
+            if (count < out.len) {
+                out[count] = .{ .start = line_start, .end = para_end };
+                count += 1;
+            }
+        } else {
+            while (line_start < para_end and count < out.len) {
+                var last_good: usize = line_start;
+                var last_space: ?usize = null;
+                var j = line_start;
+                while (j < para_end) : (j += 1) {
+                    if (text[j] == ' ') last_space = j;
+                    const w = font.measure(text[line_start .. j + 1], size).w;
+                    if (w <= max_px) {
+                        last_good = j + 1;
+                    } else break;
+                }
+                var cut = if (j >= para_end) para_end else (last_space orelse last_good);
+                if (cut <= line_start) cut = @min(line_start + 1, para_end);
+
+                out[count] = .{ .start = line_start, .end = cut };
+                count += 1;
+                line_start = cut;
+                // Space that caused the wrap stays in the buffer but is not drawn
+                // as the first glyph of the next visual row.
+                if (line_start < para_end and text[line_start] == ' ') {
+                    line_start += 1;
                 }
             }
-            var cut = if (j >= para_end) para_end else (last_space orelse last_good);
-            if (cut <= line_start) cut = @min(line_start + 1, para_end);
-
-            // copy [line_start, cut)
-            const n = cut - line_start;
-            if (o + n > out.len) return false;
-            @memcpy(out[o .. o + n], buf[line_start..cut]);
-            var m = line_start;
-            while (m < cut) : (m += 1) map[m] = o + (m - line_start);
-            o += n;
-
-            line_start = cut;
-            // drop a following space (replaced by wrap)
-            if (line_start < para_end and buf[line_start] == ' ') {
-                map[line_start] = o;
-                line_start += 1;
-            }
-            if (line_start < para_end) {
-                if (o >= out.len) return false;
-                out[o] = '\n';
-                o += 1;
-            }
         }
-        map[para_end] = o;
-        if (para_end < old_len and buf[para_end] == '\n') {
-            if (o >= out.len) return false;
-            out[o] = '\n';
-            map[para_end] = o;
-            o += 1;
+
+        if (para_end < text.len and text[para_end] == '\n') {
             i = para_end + 1;
-            map[i] = o;
+            if (i > text.len) break;
+            // Trailing newline with no following content still ends the loop next.
+            if (i == text.len) {
+                // Document ends with \n → extra empty visual row (like most editors).
+                if (count < out.len) {
+                    out[count] = .{ .start = i, .end = i };
+                    count += 1;
+                }
+                break;
+            }
         } else {
-            i = para_end;
             break;
         }
     }
-    map[old_len] = o;
-
-    if (o == old_len and std.mem.eql(u8, buf[0..old_len], out[0..o])) return false;
-
-    const copy_n = @min(o, buf.len);
-    @memcpy(buf[0..copy_n], out[0..copy_n]);
-    len.* = copy_n;
-
-    var c: usize = 0;
-    while (c < edit.caret_ct) : (c += 1) {
-        const r = &edit.carets[c];
-        r.caret = map[@min(r.caret, old_len)];
-        r.anchor = map[@min(r.anchor, old_len)];
+    if (count == 0 and out.len > 0) {
+        out[0] = .{ .start = 0, .end = text.len };
+        return 1;
     }
-    edit.clampAll(len.*);
-    return true;
+    return count;
+}
+
+/// Visual row index for a buffer offset (soft-wrap aware).
+pub fn visualRowOf(rows: []const VisualRow, pos: usize) usize {
+    if (rows.len == 0) return 0;
+    var best: usize = 0;
+    var i: usize = 0;
+    while (i < rows.len) : (i += 1) {
+        const r = rows[i];
+        if (pos < r.start) break;
+        best = i;
+        // pos in [start, end] (end = caret after last char on row)
+        if (pos <= r.end) {
+            // Prefer this row; if pos is a skipped wrap-space (end < pos < next.start),
+            // fall through to keep best as previous then check next.
+            if (pos < r.end or i + 1 >= rows.len or rows[i + 1].start > pos) {
+                return i;
+            }
+        }
+    }
+    return best;
+}
+
+/// Buffer offset for visual row + column (column = chars from row start).
+pub fn posAtVisualRowCol(rows: []const VisualRow, text: []const u8, vrow: usize, col: usize) usize {
+    if (rows.len == 0) return 0;
+    const ri = @min(vrow, rows.len - 1);
+    const r = rows[ri];
+    const max_col = r.end - r.start;
+    _ = text;
+    return r.start + @min(col, max_col);
+}
+
+/// Count visual rows (for scroll height).
+pub fn countSoftRows(text: []const u8, font: *const Font, size: f32, max_px: f32) usize {
+    var rows: [MaxSoftRows]VisualRow = undefined;
+    return layoutSoft(text, font, size, max_px, rows[0..]);
+}
+
+/// Pixel caret position (origin-relative top-left of glyph cell).
+pub fn caretDrawPos(
+    text: []const u8,
+    font: *const Font,
+    size: f32,
+    pos: usize,
+    rows: []const VisualRow,
+) struct { x: f32, row: usize } {
+    const ri = visualRowOf(rows, pos);
+    const r = rows[ri];
+    const p = @min(pos, r.end);
+    const pre = text[r.start..p];
+    return .{ .x = font.measure(pre, size).w, .row = ri };
 }
 
 // --- navigation -------------------------------------------------------------
@@ -619,27 +672,57 @@ pub fn moveEnd(edit: *Edit, text: []const u8, extend: bool, doc: bool) void {
     edit.block = false;
 }
 
-pub fn moveUp(edit: *Edit, text: []const u8, extend: bool) void {
+pub fn moveUp(edit: *Edit, text: []const u8, extend: bool, font: ?*const Font, size: f32, wrap_px: f32) void {
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    const rows: []const VisualRow = if (font) |f| blk: {
+        const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+        break :blk rows_buf[0..n];
+    } else rows_buf[0..0];
+
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         var r = &edit.carets[i];
-        const row = rowOf(text, r.caret);
-        if (row == 0) {
-            r.caret = 0;
+        if (rows.len > 0) {
+            const vr = visualRowOf(rows, r.caret);
+            if (vr == 0) {
+                r.caret = rows[0].start;
+            } else {
+                r.caret = posAtVisualRowCol(rows, text, vr - 1, edit.preferred_col);
+            }
         } else {
-            r.caret = posAtRowCol(text, row - 1, edit.preferred_col);
+            const row = rowOf(text, r.caret);
+            if (row == 0) {
+                r.caret = 0;
+            } else {
+                r.caret = posAtRowCol(text, row - 1, edit.preferred_col);
+            }
         }
         if (!extend) r.anchor = r.caret;
     }
     edit.block = false;
 }
 
-pub fn moveDown(edit: *Edit, text: []const u8, extend: bool) void {
+pub fn moveDown(edit: *Edit, text: []const u8, extend: bool, font: ?*const Font, size: f32, wrap_px: f32) void {
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    const rows: []const VisualRow = if (font) |f| blk: {
+        const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+        break :blk rows_buf[0..n];
+    } else rows_buf[0..0];
+
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         var r = &edit.carets[i];
-        const row = rowOf(text, r.caret);
-        r.caret = posAtRowCol(text, row + 1, edit.preferred_col);
+        if (rows.len > 0) {
+            const vr = visualRowOf(rows, r.caret);
+            if (vr + 1 >= rows.len) {
+                r.caret = rows[rows.len - 1].end;
+            } else {
+                r.caret = posAtVisualRowCol(rows, text, vr + 1, edit.preferred_col);
+            }
+        } else {
+            const row = rowOf(text, r.caret);
+            r.caret = posAtRowCol(text, row + 1, edit.preferred_col);
+        }
         if (!extend) r.anchor = r.caret;
     }
     edit.block = false;
@@ -702,6 +785,7 @@ pub fn addCaretVertical(edit: *Edit, text: []const u8, delta_row: i32) void {
 }
 
 /// Hit-test buffer position from pixel coords inside the text box.
+/// `wrap_px` > 0 enables soft-wrap aware hit testing (multiline only).
 pub fn posFromPoint(
     text: []const u8,
     font: *const Font,
@@ -711,10 +795,10 @@ pub fn posFromPoint(
     px: f32,
     py: f32,
     multiline: bool,
+    wrap_px: f32,
 ) usize {
     const lh = font.lineHeight(size);
     if (!multiline) {
-        // single line: binary-ish scan
         var best: usize = 0;
         var best_d: f32 = 1e9;
         var i: usize = 0;
@@ -728,29 +812,27 @@ pub fn posFromPoint(
         }
         return best;
     }
+
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    const n = layoutSoft(text, font, size, wrap_px, rows_buf[0..]);
+    const rows = rows_buf[0..n];
+    if (rows.len == 0) return 0;
+
     const row_f = (py - origin_y) / lh;
-    const row: usize = if (row_f < 0) 0 else @intFromFloat(row_f);
-    // find line
-    var r: usize = 0;
-    var ls: usize = 0;
-    var i: usize = 0;
-    while (i < text.len and r < row) : (i += 1) {
-        if (text[i] == '\n') {
-            r += 1;
-            ls = i + 1;
-        }
-    }
-    const le = lineEnd(text, ls);
-    const line = text[ls..le];
-    var best: usize = ls;
+    var row: usize = if (row_f < 0) 0 else @intFromFloat(row_f);
+    if (row >= rows.len) row = rows.len - 1;
+
+    const vr = rows[row];
+    const line = text[vr.start..vr.end];
+    var best: usize = vr.start;
     var best_d: f32 = 1e9;
-    i = 0;
+    var i: usize = 0;
     while (i <= line.len) : (i += 1) {
         const w = font.measure(line[0..i], size).w;
         const d = @abs(origin_x + w - px);
         if (d < best_d) {
             best_d = d;
-            best = ls + i;
+            best = vr.start + i;
         }
     }
     return best;
@@ -852,7 +934,7 @@ fn copyText(edit: *Edit, text: []const u8, multiline: bool) []const u8 {
 }
 
 /// Handle keyboard for an edit session. Only call when field is focused.
-/// `wrap_px` > 0 enables hard word-wrap to that content width (multi-line only).
+/// `wrap_px` > 0 enables soft word-wrap for vertical motion (display-only; buffer unchanged).
 pub fn handleKeys(
     edit: *Edit,
     buf: []u8,
@@ -939,7 +1021,7 @@ pub fn handleKeys(
             // Alt+Shift+Up: add caret on line above (column multi-cursor)
             addCaretVertical(edit, text, -1);
         } else {
-            moveUp(edit, text, shift);
+            moveUp(edit, text, shift, font, font_size, wrap_px);
             edit.ctrl_d_active = false;
         }
         edit.coalesce_typing = false;
@@ -949,7 +1031,7 @@ pub fn handleKeys(
             // Alt+Shift+Down: add caret on line below
             addCaretVertical(edit, text, 1);
         } else {
-            moveDown(edit, text, shift);
+            moveDown(edit, text, shift, font, font_size, wrap_px);
             edit.ctrl_d_active = false;
         }
         edit.coalesce_typing = false;
@@ -1025,12 +1107,7 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
     }
 
-    // Hard wrap after mutations (multi-line + width known)
-    if (changed and multiline and wrap_px > 0) {
-        if (font) |f| {
-            _ = hardWrap(edit, buf, len, f, font_size, wrap_px);
-        }
-    }
+    // Soft wrap is display-only — never mutate the buffer here.
 
     edit.clampAll(len.*);
     return changed;
@@ -1048,11 +1125,12 @@ pub fn handleMouseDown(
     mx: f32,
     my: f32,
     multiline: bool,
+    wrap_px: f32,
     now: f64,
     alt: bool,
     shift: bool,
 ) void {
-    const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline);
+    const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline, wrap_px);
     const row = rowOf(text, pos);
     const col = colOf(text, pos);
 
@@ -1133,9 +1211,10 @@ pub fn handleMouseDrag(
     mx: f32,
     my: f32,
     multiline: bool,
+    wrap_px: f32,
 ) void {
     if (!edit.dragging) return;
-    const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline);
+    const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline, wrap_px);
     if (edit.block and multiline) {
         edit.block_row1 = rowOf(text, pos);
         edit.block_col1 = colOf(text, pos);

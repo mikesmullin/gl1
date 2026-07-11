@@ -3,6 +3,7 @@
 //! "ghost" rect previews the new size until mouse-up commits it.
 const std = @import("std");
 const types = @import("../types.zig");
+const te = @import("../text_edit.zig");
 const Rect = types.Rect;
 
 const textFieldCore = @import("textFieldCore.zig");
@@ -39,10 +40,9 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
     body_h = @max(body_h, lh + 12);
 
     const text = opts.buf[0..opts.len.*];
-    var nlines: usize = 1;
-    for (text) |ch| {
-        if (ch == '\n') nlines += 1;
-    }
+    // Soft-wrap row count for scroll (display-only; buffer may be one long hard line).
+    const wrap_px: f32 = @max(0, body_w - 12);
+    const nlines = te.countSoftRows(text, ui.font, size, wrap_px);
     const content_h = @as(f32, @floatFromInt(nlines)) * lh + 12;
     const view_h = body_h;
     const need_scroll = content_h > view_h;
