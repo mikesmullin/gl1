@@ -570,7 +570,8 @@ pub fn frame(a: *app.App) void {
 
     // Numpad `.` / period: frame selection (center + zoom ~80% viewport).
     // Driven by Game9-inspired Timer + parallel Tweens (250ms, smoothstep).
-    if (a.input.keyPressed(.period) and st.canvas_sel_mask != 0 and u.focus.isNone()) {
+    // Numpad `.` / period, or F (Blender-ish frame selected).
+    if ((a.input.keyPressed(.period) or a.input.keyPressed(.f)) and st.canvas_sel_mask != 0 and u.focus.isNone()) {
         var bmin = Vec3{ .x = 1e9, .y = 1e9, .z = 1e9 };
         var bmax = Vec3{ .x = -1e9, .y = -1e9, .z = -1e9 };
         var any = false;
@@ -795,7 +796,7 @@ pub fn frame(a: *app.App) void {
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
     u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB drag orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  Numpad . frame sel  ·  7/1/3 views  ·  Ctrl/Shift multi");
+    u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  F / Numpad . frame sel  ·  7/1/3 views  ·  Ctrl/Shift multi");
 
     var buf: [96]u8 = undefined;
     const nsel = @popCount(st.canvas_sel_mask);
