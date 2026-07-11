@@ -592,7 +592,8 @@ pub fn frame(a: *app.App) void {
             st.canvas_tz = pivot.z;
         }
         const sens: f32 = 0.005;
-        st.canvas_yaw -= a.input.mouse_dx * sens;
+        // Yaw around world Y — match Blender turntable (was inverted).
+        st.canvas_yaw += a.input.mouse_dx * sens;
         st.canvas_pitch += a.input.mouse_dy * sens;
         const lim: f32 = std.math.pi * 0.5 - 0.02;
         st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
@@ -612,6 +613,32 @@ pub fn frame(a: *app.App) void {
         st.canvas_ty += r.y + uu.y;
         st.canvas_tz += r.z + uu.z;
         cam = buildCam(st);
+    }
+
+    // --- Fly navigation (Unity / Blender Walk-Fly style) ---
+    // WASD = forward / left / back / right along view
+    // Q = down, E / Space = up  (world Y)
+    // Shift = faster
+    // Skip when a text field has focus so typing isn't stolen.
+    if (u.focus.isNone() and !u.palette_open) {
+        const base_speed: f32 = 180.0;
+        const speed = if (a.input.shift) base_speed * 2.5 else base_speed;
+        const step = speed * a.dt;
+        var move = Vec3{};
+        if (a.input.keyDown(.w)) move = Vec3.add(move, cam.forward);
+        if (a.input.keyDown(.s)) move = Vec3.sub(move, cam.forward);
+        if (a.input.keyDown(.d)) move = Vec3.add(move, cam.right);
+        if (a.input.keyDown(.a)) move = Vec3.sub(move, cam.right);
+        // Vertical: world up so flying feels level (not camera-tilt dependent).
+        if (a.input.keyDown(.e) or a.input.keyDown(.space)) move = Vec3.add(move, .{ .x = 0, .y = 1, .z = 0 });
+        if (a.input.keyDown(.q)) move = Vec3.add(move, .{ .x = 0, .y = -1, .z = 0 });
+        if (Vec3.length(move) > 1e-4) {
+            move = Vec3.scale(Vec3.norm(move), step);
+            st.canvas_tx += move.x;
+            st.canvas_ty += move.y;
+            st.canvas_tz += move.z;
+            cam = buildCam(st);
+        }
     }
 
     const aspect = w / @max(h, 1);
@@ -706,8 +733,8 @@ pub fn frame(a: *app.App) void {
 
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
-    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit (sel / center)  |  Space+LMB pan  |  wheel dolly");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "LMB select  ·  Ctrl/Shift+LMB multi  ·  7/1/3 views");
+    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit  |  Space+LMB pan  |  wheel dolly  |  WASD+QE fly");
+    u.drawText(16, 58, 1.5, u.theme.text_dim, "LMB select  ·  Ctrl/Shift multi  ·  Shift=fast fly  ·  7/1/3 views");
 
     var buf: [96]u8 = undefined;
     const nsel = @popCount(st.canvas_sel_mask);

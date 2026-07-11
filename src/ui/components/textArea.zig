@@ -10,12 +10,16 @@ const textFieldCore = @import("textFieldCore.zig");
 
 const grip: f32 = 12;
 
-fn drawGrip(ui: anytype, gr: Rect, active: bool) void {
-    ui.drawRect(gr, if (active) ui.theme.accent else ui.theme.panel_border);
-    const line = if (active or gr.contains(ui.input.mouse_x, ui.input.mouse_y)) ui.theme.accent else ui.theme.text_dim;
-    ui.drawRect(.{ .x = gr.x + 3, .y = gr.y + gr.h - 4, .w = gr.w - 4, .h = 1 }, line);
-    ui.drawRect(.{ .x = gr.x + 6, .y = gr.y + gr.h - 7, .w = gr.w - 7, .h = 1 }, line);
-    ui.drawRect(.{ .x = gr.x + 9, .y = gr.y + gr.h - 10, .w = gr.w - 10, .h = 1 }, line);
+/// Solid SE resize triangle (bottom-right corner), colored like the field border.
+fn drawGrip(ui: anytype, gr: Rect, color: types.Color) void {
+    // Vertices: top-right, bottom-right, bottom-left of the grip square.
+    // Fill with horizontal spans so we don't need a triangle draw command.
+    var row: f32 = 0;
+    while (row < gr.h) : (row += 1) {
+        const t = if (gr.h > 1) row / (gr.h - 1) else 1;
+        const ww = @max(1, gr.w * t);
+        ui.drawRect(.{ .x = gr.x + gr.w - ww, .y = gr.y + row, .w = ww, .h = 1 }, color);
+    }
 }
 
 pub fn textArea(ui: anytype, opts: anytype) bool {
@@ -116,6 +120,10 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
         }
     }
 
+    const focused = ui.focus.a == i.a;
+    // Grip matches field border (accent when focused/resizing).
+    const grip_col = if (focused or ed.resizing) ui.theme.accent else ui.theme.panel_border;
+
     var changed = false;
     if (ed.resizing) {
         // Ghost: empty field shell at the preview size (no text/layout thrash).
@@ -131,7 +139,7 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
         ui.drawRectBorder(ghost, ui.theme.input_bg, ui.theme.accent, 1);
         // Optional label hint inside ghost
         ui.drawText(ghost.x + 6, ghost.y + 4, size, ui.theme.text_dim, "…");
-        drawGrip(ui, gr, true);
+        drawGrip(ui, gr, grip_col);
     } else {
         changed = textFieldCore.textFieldCore(ui, .{
             .id_key = i.a,
@@ -142,7 +150,7 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
             .size = size,
             .scroll_y = scroll,
         });
-        drawGrip(ui, gr, false);
+        drawGrip(ui, gr, grip_col);
     }
 
     return changed;
