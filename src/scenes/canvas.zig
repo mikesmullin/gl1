@@ -794,7 +794,7 @@ pub fn frame(a: *app.App) void {
 
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
-    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
+    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB drag orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
     u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  Numpad . frame sel  ·  7/1/3 views  ·  Ctrl/Shift multi");
 
     var buf: [96]u8 = undefined;
