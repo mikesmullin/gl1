@@ -2,6 +2,7 @@
 
 const sokol = @import("sokol");
 const sgl = sokol.gl;
+const sapp = sokol.app;
 const font_mod = @import("font.zig");
 
 pub const Color = [4]f32;
@@ -11,6 +12,19 @@ pub const Rect = struct {
     y: f32 = 0,
     w: f32 = 0,
     h: f32 = 0,
+
+    pub fn intersect(a: Rect, b: Rect) Rect {
+        const x0 = @max(a.x, b.x);
+        const y0 = @max(a.y, b.y);
+        const x1 = @min(a.x + a.w, b.x + b.w);
+        const y1 = @min(a.y + a.h, b.y + b.h);
+        return .{
+            .x = x0,
+            .y = y0,
+            .w = @max(0, x1 - x0),
+            .h = @max(0, y1 - y0),
+        };
+    }
 };
 
 pub const Command = union(enum) {
@@ -34,7 +48,6 @@ pub const List = struct {
 
     pub fn intern(self: *List, s: []const u8) []const u8 {
         if (self.text_used + s.len > self.text_scratch.len) {
-            // Truncate rather than crash; rare for UI demos.
             const n = @min(s.len, self.text_scratch.len -| self.text_used);
             if (n == 0) return "";
             @memcpy(self.text_scratch[self.text_used .. self.text_used + n], s[0..n]);
@@ -62,8 +75,25 @@ pub const List = struct {
         self.push(.{ .text = .{ .x = x, .y = y, .size = size, .color = color, .text = self.intern(s) } });
     }
 
+    fn applyScissor(r: Rect) void {
+        // Scissor is in framebuffer pixels; account for DPI.
+        const dpi = sapp.dpiScale();
+        const x: i32 = @intFromFloat(@floor(r.x * dpi));
+        const y: i32 = @intFromFloat(@floor(r.y * dpi));
+        const w: i32 = @intFromFloat(@ceil(r.w * dpi));
+        const h: i32 = @intFromFloat(@ceil(r.h * dpi));
+        // origin_top_left = true matches our ortho (0,0 top-left).
+        sgl.scissorRect(x, y, @max(w, 0), @max(h, 0), true);
+    }
+
     /// Execute with sokol_gl (top-left ortho already set by caller).
     pub fn flushSgl(self: *const List, font: *const font_mod.Font) void {
+        // Nested scissor stack: pop restores parent clip (intersected), never full-screen wipe
+        // while an outer clip is still active — that was why scrolled panels leaked.
+        var stack: [16]Rect = undefined;
+        var depth: usize = 0;
+        const fullscreen = Rect{ .x = 0, .y = 0, .w = 1 << 14, .h = 1 << 14 };
+
         var i: usize = 0;
         while (i < self.count) : (i += 1) {
             switch (self.cmds[i]) {
@@ -81,14 +111,25 @@ pub const List = struct {
                     font.draw(c.x, c.y, c.size, c.color, c.text);
                 },
                 .scissor_push => |r| {
-                    // sgl scissor uses top-left origin when set that way via defaults.
-                    sgl.scissorRect(@intFromFloat(r.x), @intFromFloat(r.y), @intFromFloat(r.w), @intFromFloat(r.h), true);
+                    const parent = if (depth > 0) stack[depth - 1] else fullscreen;
+                    const clipped = Rect.intersect(parent, r);
+                    if (depth < stack.len) {
+                        stack[depth] = clipped;
+                        depth += 1;
+                    }
+                    applyScissor(clipped);
                 },
                 .scissor_pop => {
-                    // No nested stack helper in sgl — re-enable full viewport via huge scissor.
-                    sgl.scissorRect(0, 0, 1 << 14, 1 << 14, true);
+                    if (depth > 0) depth -= 1;
+                    if (depth > 0) {
+                        applyScissor(stack[depth - 1]);
+                    } else {
+                        applyScissor(fullscreen);
+                    }
                 },
             }
         }
+        // Leave scissor open full-frame for any subsequent draw lists.
+        applyScissor(fullscreen);
     }
 };

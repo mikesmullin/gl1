@@ -612,6 +612,9 @@ pub const Ui = struct {
         };
 
         var scroll_off: f32 = 0;
+        // Clip body content (always when scrollable) so scrolled widgets cannot paint
+        // over the title bar or outside the panel. Nested text-field scissors pop
+        // back to this clip via draw.List's scissor stack.
         if (opts.scroll) {
             const gop = self.scroll_y.getOrPut(i.a) catch null;
             if (gop) |g| {
@@ -619,7 +622,6 @@ pub const Ui = struct {
                 if (body.contains(self.input.mouse_x, self.input.mouse_y)) {
                     g.value_ptr.* -= self.input.scroll_y * 28;
                     if (g.value_ptr.* < 0) g.value_ptr.* = 0;
-                    // Soft max — content-driven clamp happens as user scrolls empty space.
                     if (g.value_ptr.* > 4000) g.value_ptr.* = 4000;
                 }
                 scroll_off = g.value_ptr.*;
@@ -627,15 +629,12 @@ pub const Ui = struct {
             self.cmds.push(.{ .scissor_push = .{
                 .x = body.x + 1,
                 .y = body.y + 1,
-                .w = body.w - 2,
-                .h = body.h - 2,
+                .w = @max(0, body.w - 2),
+                .h = @max(0, body.h - 2),
             } });
         }
 
         self.pushId(opts.id);
-        // Stash whether this panel used scroll so endPanel can pop scissor.
-        // Encode in id stack unused — use a simple side channel via gap field abuse? 
-        // Instead: push a marker on a small stack.
         if (self.panel_scroll_depth < self.panel_scroll_stack.len) {
             self.panel_scroll_stack[self.panel_scroll_depth] = opts.scroll;
             self.panel_scroll_depth += 1;
