@@ -9,6 +9,141 @@ const draw = @import("../draw.zig");
 const te = @import("text_edit.zig");
 const types = @import("types.zig");
 const components = @import("components/root.zig");
+const icons_mod = @import("../icons.zig");
+const anim = @import("../anim.zig");
+const sapp = @import("sokol").app;
+
+pub const IconId = icons_mod.IconId;
+pub const Icons = icons_mod.Icons;
+
+/// Per-scroll-region physics (momentum + elastic overscroll). See `tmp/SCROLL.md`.
+pub const ScrollPhys = struct {
+    /// Content offset in px (0 = top). May temporarily leave [0, max_scroll] during overscroll.
+    y: f32 = 0,
+    /// px/s along scroll axis (positive = scrolling down / content moves up).
+    vel: f32 = 0,
+    mode: enum { idle, momentum, bounce } = .idle,
+    bounce_start: f64 = -1,
+    bounce_from: f32 = 0,
+    bounce_to: f32 = 0,
+    bounce_dur: f32 = 0.34,
+    /// Last measured max scroll (from endScroll).
+    max_scroll: f32 = 0,
+
+    const friction: f32 = 6.5; // 1/s exponential decay
+    const min_vel: f32 = 12; // px/s — stop momentum
+    const wheel_px: f32 = 48; // px per wheel "notch" (sokol scroll units ~1)
+    const rubber_k: f32 = 0.42; // overscroll travel scale
+    const max_over: f32 = 72; // soft cap on overscroll distance
+
+    fn rubber(excess: f32) f32 {
+        // Diminishing: large input → less extra travel.
+        const e = @abs(excess);
+        const r = ScrollPhys.rubber_k * e / (1 + e * 0.035);
+        return @min(r, ScrollPhys.max_over);
+    }
+
+    fn startBounce(self: *ScrollPhys, now: f64, target: f32) void {
+        self.mode = .bounce;
+        self.bounce_start = now;
+        self.bounce_from = self.y;
+        self.bounce_to = target;
+        self.vel = 0;
+    }
+
+    fn cancelBounce(self: *ScrollPhys) void {
+        if (self.mode == .bounce) {
+            self.mode = .idle;
+            self.bounce_start = -1;
+        }
+    }
+
+    /// Integrate momentum / bounce for one frame.
+    fn tick(self: *ScrollPhys, dt: f32, now: f64) void {
+        const max_s = self.max_scroll;
+        switch (self.mode) {
+            .idle => {
+                // Safety: if somehow parked outside bounds, soft-return.
+                if (self.y < -0.5) self.startBounce(now, 0) else if (self.y > max_s + 0.5) self.startBounce(now, max_s);
+            },
+            .momentum => {
+                self.y += self.vel * dt;
+                // Exponential friction (frame-rate independent).
+                self.vel *= @exp(-ScrollPhys.friction * dt);
+
+                // Resist when past edges (rubber while coasting).
+                if (self.y < 0) {
+                    self.y *= 0.85;
+                    self.vel *= 0.55;
+                    if (self.vel > -ScrollPhys.min_vel) {
+                        self.startBounce(now, 0);
+                        return;
+                    }
+                } else if (self.y > max_s) {
+                    const over = self.y - max_s;
+                    self.y = max_s + over * 0.85;
+                    self.vel *= 0.55;
+                    if (self.vel < ScrollPhys.min_vel) {
+                        self.startBounce(now, max_s);
+                        return;
+                    }
+                }
+
+                if (@abs(self.vel) < ScrollPhys.min_vel) {
+                    self.vel = 0;
+                    if (self.y < 0) {
+                        self.startBounce(now, 0);
+                    } else if (self.y > max_s) {
+                        self.startBounce(now, max_s);
+                    } else {
+                        self.mode = .idle;
+                    }
+                }
+            },
+            .bounce => {
+                if (self.bounce_start < 0 or self.bounce_dur <= 0) {
+                    self.y = self.bounce_to;
+                    self.mode = .idle;
+                    return;
+                }
+                const t = @as(f32, @floatCast((now - self.bounce_start) / @as(f64, self.bounce_dur)));
+                if (t >= 1) {
+                    self.y = self.bounce_to;
+                    self.mode = .idle;
+                    self.bounce_start = -1;
+                    self.vel = 0;
+                } else {
+                    self.y = anim.mix(anim.ease(.ease_out_back, t), self.bounce_from, self.bounce_to);
+                }
+            },
+        }
+    }
+
+    /// Wheel/trackpad delta: `wheel` is sokol scroll_y (positive = fingers up / content should go down → decrease y? 
+    /// Existing convention: y -= dy * scale, so positive wheel decreases scroll offset (shows content above).
+    fn applyWheel(self: *ScrollPhys, wheel: f32, now: f64) void {
+        self.cancelBounce();
+        // Convert wheel to scroll delta in content-offset space (positive = scroll down).
+        const delta = -wheel * ScrollPhys.wheel_px;
+        const max_s = self.max_scroll;
+
+        // Immediate step with rubber-band past ends.
+        var next = self.y + delta;
+        if (next < 0) {
+            next = -ScrollPhys.rubber(-next);
+        } else if (next > max_s) {
+            next = max_s + ScrollPhys.rubber(next - max_s);
+        }
+        self.y = next;
+
+        // Impart momentum so a flick keeps coasting a little.
+        self.vel += delta * 14;
+        // Cap coast speed.
+        self.vel = std.math.clamp(self.vel, -2400, 2400);
+        self.mode = .momentum;
+        _ = now;
+    }
+};
 
 pub const Theme = theme_mod.Theme;
 pub const Color = types.Color;
@@ -39,6 +174,7 @@ const IdRect = struct { id: Id, r: Rect };
 pub const Ui = struct {
     input: *Input = undefined,
     font: *const Font = undefined,
+    icons: ?*const Icons = null,
     theme: Theme = theme_mod.dark,
     width: f32 = 0,
     height: f32 = 0,
@@ -69,8 +205,10 @@ pub const Ui = struct {
     id_stack: [16]u64 = undefined,
     id_depth: usize = 0,
 
-    /// Scroll area state (keyed loosely by id hash).
+    /// Simple scroll offsets (text areas, panel bodies).
     scroll_y: std.AutoHashMap(u64, f32) = undefined,
+    /// Physics-driven scroll regions (`beginScroll` / `endScroll`).
+    scroll_phys: std.AutoHashMap(u64, ScrollPhys) = undefined,
     text_bufs: std.AutoHashMap(u64, []u8) = undefined,
     allocator: std.mem.Allocator = undefined,
     inited: bool = false,
@@ -130,8 +268,16 @@ pub const Ui = struct {
     panel_scroll_depth: usize = 0,
 
     /// Nested beginScroll frames (viewport + id for endScroll scrollbar).
-    scroll_frames: [8]struct { id: Id = .{}, view: Rect = .{} } = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
+    scroll_frames: [8]struct { id: Id = .{}, view: Rect = .{}, content_h: f32 = 0 } = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
     scroll_frame_depth: usize = 0,
+
+    /// Soft pointer capture (Game9-style): first click in the app arms it,
+    /// OS cursor hides, we draw a custom icon cursor. Unfocus releases.
+    soft_pointer: bool = false,
+    /// Swallow the click that armed soft pointer (no click-through).
+    soft_pointer_swallow: bool = false,
+    /// Preferred cursor icon while soft pointer is active (widgets may set).
+    soft_cursor: IconId = .cursor_arrow,
 
     pub const ToastKind = enum { info, ok, warn, err };
     pub const Toast = struct {
@@ -144,6 +290,7 @@ pub const Ui = struct {
     pub fn init(self: *Ui, allocator: std.mem.Allocator) void {
         self.allocator = allocator;
         self.scroll_y = std.AutoHashMap(u64, f32).init(allocator);
+        self.scroll_phys = std.AutoHashMap(u64, ScrollPhys).init(allocator);
         self.text_bufs = std.AutoHashMap(u64, []u8).init(allocator);
         self.edits = std.AutoHashMap(u64, te.Edit).init(allocator);
         self.inited = true;
@@ -157,6 +304,7 @@ pub const Ui = struct {
         }
         self.text_bufs.deinit();
         self.scroll_y.deinit();
+        self.scroll_phys.deinit();
         self.edits.deinit();
         self.inited = false;
     }
@@ -170,9 +318,10 @@ pub const Ui = struct {
         return gop.value_ptr;
     }
 
-    pub fn beginFrame(self: *Ui, input: *Input, font: *const Font, w: f32, h: f32, dt: f32, time: f64) void {
+    pub fn beginFrame(self: *Ui, input: *Input, font: *const Font, icons: ?*const Icons, w: f32, h: f32, dt: f32, time: f64) void {
         self.input = input;
         self.font = font;
+        self.icons = icons;
         self.width = w;
         self.height = h;
         self.dt = dt;
@@ -189,14 +338,28 @@ pub const Ui = struct {
         self.tooltip_len = 0;
         self.consumed_escape = false;
         self.scroll_eaten = false;
-        // Clear drag when mouse released; restore cursor if a slider captured it.
+        self.soft_cursor = .cursor_arrow;
+
+        // Soft pointer: first LMB press in the window arms capture and swallows that click.
+        self.soft_pointer_swallow = false;
+        if (!self.soft_pointer and input.mousePressed(.left)) {
+            self.soft_pointer = true;
+            self.soft_pointer_swallow = true;
+            sapp.showMouse(false);
+            // Clear press so widgets don't treat the arming click as UI activation.
+            input.mouse_pressed[@intFromEnum(input_mod.MouseButton.left)] = false;
+            // Also clear down for this frame's click edge semantics; keep down if still held for drag.
+            // Leave mouse_down true so holding still works after arm — only pressed edge swallowed.
+        }
+
+        // Clear drag when mouse released; restore relative-lock if a slider captured it.
+        // Soft pointer keeps OS cursor hidden even after slider drag ends.
         if (!input.mouseDown(.left) and !self.drag.isNone()) {
             self.drag = .{};
             if (self.mouse_captured_for_drag) {
                 self.mouse_captured_for_drag = false;
-                const sapp = @import("sokol").app;
                 sapp.lockMouse(false);
-                sapp.showMouse(true);
+                if (!self.soft_pointer) sapp.showMouse(true);
             }
         }
         // ctx_just_opened cleared at end of frame after contextMenu runs.
@@ -484,9 +647,67 @@ pub const Ui = struct {
         self.front.text(x, y, size, color, text);
     }
 
+    pub fn setSoftCursor(self: *Ui, icon: IconId) void {
+        self.soft_cursor = icon;
+    }
+
+    pub fn releaseSoftPointer(self: *Ui) void {
+        if (!self.soft_pointer) return;
+        self.soft_pointer = false;
+        sapp.showMouse(true);
+    }
+
+    pub fn drawIcon(self: *Ui, x: f32, y: f32, size: f32, icon: IconId, color: ?Color) void {
+        const c = color orelse .{ 1, 1, 1, 1 };
+        self.cmds.icon(x, y, size, @intFromEnum(icon), c);
+    }
+
+    pub fn drawIconFront(self: *Ui, x: f32, y: f32, size: f32, icon: IconId, color: ?Color) void {
+        const c = color orelse .{ 1, 1, 1, 1 };
+        self.front.icon(x, y, size, @intFromEnum(icon), c);
+    }
+
+    /// Icon + label row (for storybook / toolbar buttons). Returns true if clicked.
+    pub fn iconButton(self: *Ui, opts: struct {
+        id: []const u8,
+        icon: IconId,
+        label: []const u8 = "",
+        w: f32 = 0,
+        icon_size: f32 = 20,
+    }) bool {
+        const size = self.theme.font_size;
+        const label_w: f32 = if (opts.label.len > 0) self.font.measure(opts.label, size).w else 0;
+        const label_h: f32 = if (opts.label.len > 0) self.font.measure(opts.label, size).h else 0;
+        const pad: f32 = 8;
+        const gap: f32 = 6;
+        const iw = opts.icon_size;
+        const need_w = if (opts.w > 0) opts.w else pad + iw + (if (opts.label.len > 0) gap + label_w else 0) + pad;
+        const r = self.alloc(need_w, self.theme.button_h);
+        const st = self.interact(self.id(opts.id), r, false);
+        const fill: Color = if (st.active) self.theme.button_active else if (st.hot) self.theme.button_hot else self.theme.button;
+        self.drawRectBorder(r, fill, self.theme.panel_border, 1);
+        const iy = r.y + (r.h - iw) * 0.5;
+        self.drawIcon(r.x + pad, iy, iw, opts.icon, null);
+        if (opts.label.len > 0) {
+            const tx = r.x + pad + iw + gap;
+            const ty = r.y + (r.h - label_h) * 0.5;
+            self.drawText(tx, ty, size, self.theme.text, opts.label);
+        }
+        if (st.hot) self.setSoftCursor(.cursor_arrow);
+        return st.clicked;
+    }
+
     pub fn flushDraw(self: *Ui) void {
-        self.cmds.flushSgl(self.font);
-        self.front.flushSgl(self.font);
+        self.cmds.flushSgl(self.font, self.icons);
+        self.front.flushSgl(self.font, self.icons);
+        // Soft pointer cursor drawn last (above all UI).
+        // Hidden while a relative-drag widget (slider) has locked the mouse —
+        // same “cursor disappears while scrubbing” feel as before soft-pointer.
+        if (self.soft_pointer and !self.mouse_captured_for_drag) {
+            if (self.icons) |ic| {
+                ic.drawHotspot(self.input.mouse_x, self.input.mouse_y, icons_mod.native_size, self.soft_cursor, .{ 1, 1, 1, 1 });
+            }
+        }
     }
 
     // --- Interaction --------------------------------------------------------
@@ -1048,35 +1269,42 @@ pub const Ui = struct {
     }
 
     /// Scrollable region with GPU scissor clip + wheel scroll when hovered.
-    /// Draws a vertical scrollbar when content exceeds the viewport.
+    /// Momentum coast + elastic overscroll bounce (`tmp/SCROLL.md`). Scrollbar thumb
+    /// stays clamped to the track even while content rubber-bands.
     pub fn beginScroll(self: *Ui, opts: struct { id: []const u8, x: f32, y: f32, w: f32, h: f32 }) f32 {
         const i = self.id(opts.id);
         const r = self.place(opts.x, opts.y, opts.w, opts.h);
         self.remember(i, r);
         self.drawRectBorder(r, self.theme.panel, self.theme.panel_border, 1);
-        const gop = self.scroll_y.getOrPut(i.a) catch return 0;
-        if (!gop.found_existing) gop.value_ptr.* = 0;
+
+        const gop = self.scroll_phys.getOrPut(i.a) catch return 0;
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+
+        // Integrate ongoing momentum / bounce before reading offset for layout.
+        gop.value_ptr.tick(self.dt, self.time);
+
         const dy = self.wheelY();
         if (dy != 0 and r.contains(self.input.mouse_x, self.input.mouse_y)) {
-            gop.value_ptr.* -= dy * 24;
-            if (gop.value_ptr.* < 0) gop.value_ptr.* = 0;
+            gop.value_ptr.applyWheel(dy, self.time);
             self.eatScroll();
         }
-        const scroll = gop.value_ptr.*;
+
+        const scroll = gop.value_ptr.y;
         // Leave 8px for the scrollbar track on the right.
         const sb_w: f32 = 8;
         const clip = Rect{ .x = r.x + 1, .y = r.y + 1, .w = @max(0, r.w - 2 - sb_w), .h = r.h - 2 };
         self.cmds.push(.{ .scissor_push = .{ .x = clip.x, .y = clip.y, .w = clip.w, .h = clip.h } });
         if (self.scroll_frame_depth < self.scroll_frames.len) {
-            self.scroll_frames[self.scroll_frame_depth] = .{ .id = i, .view = r };
+            self.scroll_frames[self.scroll_frame_depth] = .{ .id = i, .view = r, .content_h = 0 };
             self.scroll_frame_depth += 1;
         }
         self.pushId(opts.id);
+        // Content is shifted by -scroll; allow overscroll (negative or past end) for rubber-band.
         self.beginVStack(.{
             .x = r.x,
             .y = r.y - scroll,
             .w = @max(0, r.w - sb_w),
-            .h = r.h + scroll,
+            .h = r.h + @max(0, scroll) + 80, // room for overscroll drawing
             .pad = self.theme.pad,
             .gap = self.theme.gap,
         });
@@ -1094,15 +1322,25 @@ pub const Ui = struct {
         const r = frame.view;
         const sb_w: f32 = 8;
         const view_h = r.h - 2;
-        // Content height from layout (includes pad); compare to viewport.
         const content_h = content.h;
         const max_scroll = @max(0, content_h - view_h);
-        if (max_scroll > 0) {
-            if (self.scroll_y.getPtr(frame.id.a)) |sy| {
-                if (sy.* > max_scroll) sy.* = max_scroll;
+
+        var scroll_vis: f32 = 0;
+        if (self.scroll_phys.getPtr(frame.id.a)) |sp| {
+            const prev_max = sp.max_scroll;
+            sp.max_scroll = max_scroll;
+            // Content shrank: keep offset in range without a hard snap-fight.
+            if (max_scroll < prev_max and sp.mode == .idle and sp.y > max_scroll) {
+                sp.y = max_scroll;
             }
+            // Empty / non-scrollable: settle to 0.
+            if (max_scroll <= 0 and sp.mode == .idle and sp.y != 0) {
+                sp.startBounce(self.time, 0);
+            }
+            // Thumb uses clamped scroll so it never leaves the track during overscroll.
+            scroll_vis = std.math.clamp(sp.y, 0, max_scroll);
         }
-        const scroll = self.scroll_y.get(frame.id.a) orelse 0;
+
         const track = Rect{
             .x = r.x + r.w - sb_w - 1,
             .y = r.y + 1,
@@ -1112,11 +1350,10 @@ pub const Ui = struct {
         self.drawRect(track, self.theme.slider_track);
         if (max_scroll > 0 and content_h > 0) {
             const thumb_h = @max(16, view_h * (view_h / content_h));
-            const t = if (max_scroll > 0) scroll / max_scroll else 0;
+            const t = if (max_scroll > 0) scroll_vis / max_scroll else 0;
             const thumb_y = track.y + (view_h - thumb_h) * t;
             self.drawRect(.{ .x = track.x + 1, .y = thumb_y, .w = sb_w - 2, .h = thumb_h }, self.theme.accent);
         } else {
-            // Still show a full-height thumb so the scrollbar is visible as chrome.
             self.drawRect(.{ .x = track.x + 1, .y = track.y, .w = sb_w - 2, .h = view_h }, self.theme.panel_border);
         }
     }
@@ -1157,10 +1394,11 @@ pub const Ui = struct {
         if (st.clicked) opts.open.* = !opts.open.*;
         if (st.hot) self.setTooltip(if (opts.open.*) "Click to collapse" else "Click to expand");
         self.drawRect(full, if (st.hot) self.theme.button_hot else self.theme.button);
-        const arrow: []const u8 = if (opts.open.*) "v " else "> ";
-        self.drawText(full.x + 6, full.y + 6, self.theme.font_size, self.theme.accent, arrow);
-        const am = self.font.measure(arrow, self.theme.font_size);
-        self.drawText(full.x + 6 + am.w, full.y + 6, self.theme.font_size, self.theme.text, opts.title);
+        const ic: IconId = if (opts.open.*) .arrow_down else .arrow_right;
+        const icon_sz: f32 = 16;
+        self.drawIcon(full.x + 6, full.y + (full.h - icon_sz) * 0.5, icon_sz, ic, null);
+        self.drawText(full.x + 6 + icon_sz + 6, full.y + 6, self.theme.font_size, self.theme.text, opts.title);
+        if (st.hot) self.setSoftCursor(.cursor_hand_open);
         if (opts.open.*) {
             self.pushId(opts.id);
             self.beginVStack(.{
@@ -1422,6 +1660,10 @@ pub const Ui = struct {
             const dx = self.input.mouse_x - self.drag_anchor;
             opts.width.* = std.math.clamp(self.drag_value0 + dx, opts.min, opts.max);
         }
+        // Horizontal resize cursor over the splitter gap (hover + drag).
+        if (self.drag.eq(i) or over) {
+            self.setSoftCursor(.cursor_resize_h);
+        }
         const fill: Color = if (self.drag.eq(i) or self.hot.eq(i)) self.theme.accent else self.theme.panel_border;
         self.drawRect(r, fill);
     }
@@ -1559,14 +1801,17 @@ pub const Ui = struct {
         var toggled = false;
         var x = full.x + 4 + indent;
         if (opts.open) |op| {
-            const arrow: []const u8 = if (op.*) "v" else ">";
-            self.drawText(x, full.y + 5, self.theme.font_size, self.theme.accent, arrow);
+            const ic: IconId = if (op.*) .arrow_down else .arrow_right;
+            self.drawIcon(x, full.y + (full.h - 16) * 0.5, 16, ic, null);
             // Whole row toggles expand/collapse (arrow or label) — easier hit target.
             if (st.clicked) {
                 op.* = !op.*;
                 toggled = true;
             }
-            x += 16;
+            x += 20;
+        } else {
+            self.drawIcon(x, full.y + (full.h - 14) * 0.5, 14, .tree_leaf, null);
+            x += 18;
         }
         self.drawText(x, full.y + 5, self.theme.font_size, self.theme.text, opts.label);
         // Expandable nodes consume the click as a toggle; leaves report selection clicks.

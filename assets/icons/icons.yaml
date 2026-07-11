@@ -1,0 +1,426 @@
+# gl1 icon atlas manifest — packed from tmp/icons-original.png
+sheet: icons.png
+tile: 24
+gutter: 2
+stride: 26
+columns: 8
+rows: 7
+width: 206
+height: 180
+icons:
+  - id: cursor_arrow
+    aliases: [pointer, default, cursor]
+    x: 0
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 2
+    hotspot_y: 1
+  - id: cursor_hand_open
+    aliases: [hand, hand_open, hand-open]
+    x: 26
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 3
+  - id: cursor_hand_closed
+    aliases: [grab, hand_closed, hand-closed, grip, grabbing]
+    x: 52
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 3
+  - id: cursor_text
+    aliases: [ibeam, text]
+    x: 78
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 2
+  - id: cursor_cross
+    aliases: [crosshair]
+    x: 104
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: cursor_resize_h
+    aliases: [resize-ew, resize_ew]
+    x: 130
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: cursor_resize_v
+    aliases: [resize-ns, resize_ns]
+    x: 156
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: cursor_resize_nwse
+    aliases: [resize-nwse, resize_nwse]
+    x: 182
+    y: 0
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: cursor_resize_nesw
+    aliases: [resize-nesw, resize_nesw]
+    x: 0
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: cursor_busy
+    aliases: [wait]
+    x: 26
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_down
+    aliases: [caret-down, v, tree-open, tree_open, chevron-down]
+    x: 52
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_up
+    aliases: [caret-up, ^, chevron-up]
+    x: 78
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_left
+    aliases: [caret-left, <, chevron-left]
+    x: 104
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_right
+    aliases: [caret-right, >, tree-closed, tree_closed, chevron-right]
+    x: 130
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: tree_leaf
+    aliases: [leaf]
+    x: 156
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: folder
+    aliases: [dir]
+    x: 182
+    y: 26
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: folder_open
+    aliases: [dir-open, dir_open]
+    x: 0
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: check
+    aliases: [ok, tick]
+    x: 26
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: close
+    aliases: [x, cancel]
+    x: 52
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: plus
+    aliases: [plus, add]
+    x: 78
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: minus
+    aliases: [minus, subtract, remove]
+    x: 104
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: search
+    aliases: [find, filter]
+    x: 130
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: settings
+    aliases: [gear, cog]
+    x: 156
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: home
+    aliases: [home]
+    x: 182
+    y: 52
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: save
+    aliases: [disk]
+    x: 0
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: copy
+    aliases: [copy]
+    x: 26
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: paste
+    aliases: [paste]
+    x: 52
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: trash
+    aliases: [delete]
+    x: 78
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: eye
+    aliases: [eye, visible]
+    x: 104
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: lock
+    aliases: [lock]
+    x: 130
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: star
+    aliases: [star]
+    x: 156
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: download
+    aliases: [download]
+    x: 182
+    y: 78
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_smile
+    aliases: [smile]
+    x: 0
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_heart
+    aliases: [heart]
+    x: 26
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_laugh
+    aliases: [joy]
+    x: 52
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_thumbs_up
+    aliases: [thumbs-up, thumbsup]
+    x: 78
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_fire
+    aliases: [fire]
+    x: 104
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_party
+    aliases: [tada]
+    x: 130
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_cry
+    aliases: [sad]
+    x: 156
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_think
+    aliases: [thinking]
+    x: 182
+    y: 104
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_clap
+    aliases: [clap]
+    x: 0
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: emoji_100
+    aliases: [hundred]
+    x: 26
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_s
+    aliases: [arrow-s]
+    x: 52
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_n
+    aliases: [arrow-n]
+    x: 78
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_w
+    aliases: [arrow-w]
+    x: 104
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: arrow_e
+    aliases: [arrow-e]
+    x: 130
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: long_arrow_w
+    aliases: [long-arrow-w]
+    x: 156
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: long_arrow_e
+    aliases: [long-arrow-e]
+    x: 182
+    y: 130
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: chevron_s
+    aliases: [chevron-s]
+    x: 0
+    y: 156
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: chevron_n
+    aliases: [chevron-n]
+    x: 26
+    y: 156
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: chevron_s_dark
+    aliases: [chevron-s-dark]
+    x: 52
+    y: 156
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12
+  - id: chevron_n_dark
+    aliases: [chevron-n-dark]
+    x: 78
+    y: 156
+    w: 24
+    h: 24
+    hotspot_x: 12
+    hotspot_y: 12

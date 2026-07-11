@@ -20,7 +20,9 @@ pub fn dropdown(ui: anytype, opts: anytype) bool {
     const sel = if (opts.selected.* < opts.items.len) opts.items[opts.selected.*] else "(none)";
     ui.drawRectBorder(box, ui.theme.input_bg, if (opts.open.*) ui.theme.accent else ui.theme.panel_border, 1);
     ui.drawText(box.x + 6, box.y + 6, size, ui.theme.text, sel);
-    ui.drawText(box.x + box.w - 18, box.y + 6, size, ui.theme.text_dim, if (opts.open.*) "^" else "v");
+    // Closed → caret-right; open → caret-down.
+    ui.drawIcon(box.x + box.w - 22, box.y + (box.h - 16) * 0.5, 16, if (opts.open.*) .arrow_down else .arrow_right, null);
+    if (st.hot) ui.setSoftCursor(.cursor_hand_open);
 
     var changed = false;
     if (opts.open.*) {

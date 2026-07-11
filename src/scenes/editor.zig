@@ -97,12 +97,12 @@ fn applyName(st: *state.State) void {
     }
 }
 
-/// Header row with title left and a collapse control float-right.
-fn panelHeaderCollapse(u: anytype, title: []const u8, collapse_id: []const u8, collapse_label: []const u8) bool {
+/// Header row with title left and a collapse icon float-right.
+fn panelHeaderCollapse(u: anytype, title: []const u8, collapse_id: []const u8, icon: ui.IconId) bool {
     const row_h = u.theme.row_h;
     const row = u.alloc(0, row_h);
     u.drawText(row.x, row.y + 6, u.theme.title_font_size, u.theme.text, title);
-    const btn_w: f32 = 36;
+    const btn_w: f32 = 28;
     const br = ui.Rect{
         .x = row.x + row.w - btn_w,
         .y = row.y + 2,
@@ -111,8 +111,8 @@ fn panelHeaderCollapse(u: anytype, title: []const u8, collapse_id: []const u8, c
     };
     const stt = u.interact(u.id(collapse_id), br, false);
     u.drawRect(br, if (stt.hot) u.theme.button_hot else u.theme.button);
-    const m = u.font.measure(collapse_label, u.theme.font_size);
-    u.drawText(br.x + (br.w - m.w) * 0.5, br.y + (br.h - m.h) * 0.5, u.theme.font_size, u.theme.text, collapse_label);
+    u.drawIcon(br.x + (br.w - 18) * 0.5, br.y + (br.h - 18) * 0.5, 18, icon, null);
+    if (stt.hot) u.setSoftCursor(.cursor_hand_open);
     return stt.clicked;
 }
 
@@ -163,7 +163,8 @@ pub fn draw(a: *app.App) void {
         const chip = ui.Rect{ .x = 6, .y = 6, .w = 22, .h = 22 };
         const stt = u.interact(u.id("ed_tree_expand"), chip, false);
         u.drawRectBorder(chip, if (stt.hot) u.theme.button_hot else u.theme.panel, u.theme.accent, 1);
-        u.drawText(chip.x + 5, chip.y + 3, 2.0, u.theme.accent, ">");
+        // Collapsed panel chip: caret-right (expand).
+        u.drawIcon(chip.x + 2, chip.y + 2, 18, .arrow_right, null);
         if (stt.clicked) st.editor_tree_open = true;
         st.editor_hit_tree = .{ .open = true, .x = chip.x, .y = chip.y, .w = chip.w, .h = chip.h };
     } else {
@@ -175,7 +176,7 @@ pub fn draw(a: *app.App) void {
         if (u.beginPanel(.{ .id = "ed_tree", .x = tree_x, .y = tree_y, .w = tree_w, .h = tree_h, .scroll = true })) {
             defer u.endPanel();
 
-            if (panelHeaderCollapse(u, "Entities", "ed_tree_collapse", "<<")) {
+            if (panelHeaderCollapse(u, "Entities", "ed_tree_collapse", .arrow_left)) {
                 st.editor_tree_open = false;
             }
 
@@ -243,7 +244,8 @@ pub fn draw(a: *app.App) void {
         const chip = ui.Rect{ .x = a.width - 28, .y = 6, .w = 22, .h = 22 };
         const stt = u.interact(u.id("ed_insp_expand"), chip, false);
         u.drawRectBorder(chip, if (stt.hot) u.theme.button_hot else u.theme.panel, u.theme.accent, 1);
-        u.drawText(chip.x + 5, chip.y + 3, 2.0, u.theme.accent, "<");
+        // arrow_right art renders pointing left (axis inversion on filled arrows).
+        u.drawIcon(chip.x + 2, chip.y + 2, 18, .arrow_right, null);
         if (stt.clicked) st.editor_inspector_open = true;
         st.editor_hit_insp = .{ .open = true, .x = chip.x, .y = chip.y, .w = chip.w, .h = chip.h };
     } else {
@@ -255,7 +257,7 @@ pub fn draw(a: *app.App) void {
         if (u.beginPanel(.{ .id = "ed_insp", .x = insp_x, .y = insp_y, .w = insp_w, .h = insp_h, .scroll = true })) {
             defer u.endPanel();
 
-            if (panelHeaderCollapse(u, "Inspector", "ed_insp_collapse", ">>")) {
+            if (panelHeaderCollapse(u, "Inspector", "ed_insp_collapse", .arrow_right)) {
                 st.editor_inspector_open = false;
             }
 
@@ -314,7 +316,8 @@ pub fn draw(a: *app.App) void {
         const cr = ui.Rect{ .x = cx + cw - 36, .y = cy + 2, .w = 28, .h = 20 };
         const cst = u.interact(u.id("ed_con_collapse"), cr, false);
         u.drawRect(cr, if (cst.hot) u.theme.button_hot else u.theme.button);
-        u.drawText(cr.x + 6, cr.y + 3, 1.5, u.theme.text, "v");
+        // Open console: caret-down (collapse).
+        u.drawIcon(cr.x + 6, cr.y + 2, 14, .arrow_down, null);
         if (cst.clicked) st.editor_console_open = false;
 
         u.console(.{
@@ -329,7 +332,9 @@ pub fn draw(a: *app.App) void {
         st.editor_hit_console = .{ .open = true, .x = bar.x, .y = bar.y, .w = bar.w, .h = bar.h };
         const bst = u.interact(u.id("ed_con_expand"), bar, false);
         u.drawRectBorder(bar, if (bst.hot) u.theme.button_hot else u.theme.panel, u.theme.panel_border, 1);
-        u.drawText(bar.x + 8, bar.y + 3, 1.5, u.theme.text_dim, "Console ^");
+        // Collapsed: caret-up (click to expand).
+        u.drawIcon(bar.x + 6, bar.y + 2, 14, .arrow_up, null);
+        u.drawText(bar.x + 24, bar.y + 3, 1.5, u.theme.text_dim, "Console");
         if (bst.clicked) st.editor_console_open = true;
     }
 }

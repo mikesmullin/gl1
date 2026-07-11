@@ -29,5 +29,6 @@ pub fn button(ui: anytype, opts: anytype) bool {
     const ty = r.y + (r.h - m.h) * 0.5;
     const tc: Color = if (opts.disabled) ui.theme.text_dim else ui.theme.text;
     ui.drawText(tx, ty, size, tc, opts.label);
+    if (st.hot and !opts.disabled) ui.setSoftCursor(.cursor_arrow);
     return st.clicked;
 }

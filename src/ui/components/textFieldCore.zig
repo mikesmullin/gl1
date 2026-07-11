@@ -38,7 +38,8 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
         );
     }
     const focused = ui.focus.a == opts.id_key;
-    _ = st; // hit-test still registered for hot/active
+    // I-beam over text content (single-line and multi-line).
+    if (st.hot or focused) ui.setSoftCursor(.cursor_text);
     if (focused and ui.input.mouseDown(.left) and ed.dragging) {
         const ox = box.x + 6;
         const oy = box.y + 4 - opts.scroll_y;

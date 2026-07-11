@@ -12,6 +12,7 @@ const items = [_][]const u8{
     "Collapsible",
     "ContextMenu",
     "Dropdown",
+    "Icons",
     "Layout",
     "ListBox",
     "Menubar",
@@ -64,10 +65,12 @@ pub fn frame(a: *app.App) void {
     const dx = sidebar_w + 16;
     const dw = a.width - dx - 16;
     const title = if (st.selected < items.len) items[st.selected] else "Story";
-    if (u.beginPanel(.{ .id = "detail", .x = dx, .y = 16, .w = dw, .h = a.height - 32, .title = title })) {
+    const tab = if (st.selected < items.len) items[st.selected] else "";
+    // Icons grid is tall — enable body scroll on the detail panel for that tab.
+    const detail_scroll = eq(tab, "Icons");
+    if (u.beginPanel(.{ .id = "detail", .x = dx, .y = 16, .w = dw, .h = a.height - 32, .title = title, .scroll = detail_scroll })) {
         defer u.endPanel();
 
-        const tab = if (st.selected < items.len) items[st.selected] else "";
         if (eq(tab, "Overview")) {
             u.label(.{ .text = "gl1 is a portable Zig + Sokol immediate-mode UI prototype." });
             u.label(.{ .text = "It explores dense tool-style chrome (panels, editors, 3D canvas) in a single binary." });
@@ -136,6 +139,50 @@ pub fn frame(a: *app.App) void {
                 .open = &st.dropdown_open,
                 .w = 220,
             });
+        } else if (eq(tab, "Icons")) {
+            u.label(.{ .text = "Icon atlas (24×24) — assets/icons + YAML manifest" });
+            u.label(.{ .text = "Soft pointer: first click hides OS cursor. Refer to icons by alias when reporting issues.", .color = u.theme.text_dim });
+            u.separator();
+            u.label(.{ .text = "Samples (icon buttons)" });
+            if (u.iconButton(.{ .id = "ic_save", .icon = .save, .label = "Save" })) u.toast("Save", .ok, 1);
+            if (u.iconButton(.{ .id = "ic_search", .icon = .search, .label = "Search" })) u.toast("Search", .info, 1);
+            if (u.iconButton(.{ .id = "ic_trash", .icon = .trash, .label = "Delete" })) u.toast("Delete", .err, 1);
+            if (u.iconButton(.{ .id = "ic_settings", .icon = .settings, .label = "Settings" })) u.toast("Settings", .info, 1);
+            u.separator();
+            u.label(.{ .text = "All icons — alias + glyph (atlas order, multi-column)" });
+            u.label(.{ .text = "Use the alias text when calling out a slot that needs cleanup.", .color = u.theme.text_dim });
+
+            // Tabular multi-column: each cell is [icon][alias].
+            const all = std.meta.tags(ui.IconId);
+            const icon_sz: f32 = 24;
+            const col_w: f32 = 148; // icon + gap + alias text
+            const row_h: f32 = 32;
+            const gap_x: f32 = 8;
+            const gap_y: f32 = 4;
+            const panel_inner_w = @max(200.0, dw - 48);
+            const ncols: usize = @max(1, @as(usize, @intFromFloat(@floor((panel_inner_w + gap_x) / (col_w + gap_x)))));
+            const nrows = (all.len + ncols - 1) / ncols;
+
+            var row_i: usize = 0;
+            while (row_i < nrows) : (row_i += 1) {
+                const row = u.alloc(0, row_h + gap_y);
+                var col_i: usize = 0;
+                while (col_i < ncols) : (col_i += 1) {
+                    // Row-major: left-to-right, top-to-bottom = atlas sheet order.
+                    const idx_rm = row_i * ncols + col_i;
+                    if (idx_rm >= all.len) break;
+                    const cid = all[idx_rm];
+                    const cell_x = row.x + @as(f32, @floatFromInt(col_i)) * (col_w + gap_x);
+                    const cell_y = row.y;
+                    u.drawIcon(cell_x, cell_y + (row_h - icon_sz) * 0.5, icon_sz, cid, null);
+                    const alias = cid.primaryAlias();
+                    u.drawText(cell_x + icon_sz + 8, cell_y + (row_h - u.font.lineHeight(1.6)) * 0.5, 1.6, u.theme.text, alias);
+                }
+            }
+
+            u.separator();
+            u.separator();
+            u.label(.{ .text = "Hover buttons for pointer; sliders use hand/grab. Esc releases soft pointer before quit.", .color = u.theme.text_dim });
         } else if (eq(tab, "Layout")) {
             u.label(.{ .text = "Layout: vstack + hstack + padding/gap" });
             u.label(.{ .text = "Example 1 — horizontal row of actions", .color = u.theme.text_dim });

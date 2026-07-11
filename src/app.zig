@@ -10,18 +10,23 @@ const sgl = sokol.gl;
 
 const input_mod = @import("input.zig");
 const font_mod = @import("font.zig");
+const icons_mod = @import("icons.zig");
 const ui_mod = @import("ui/ui.zig");
 const scenes = @import("scenes/scenes.zig");
 const font_assets = @import("font_assets");
+const icon_assets = @import("icon_assets");
 
 pub const Input = input_mod.Input;
 pub const Font = font_mod.Font;
+pub const Icons = icons_mod.Icons;
 pub const Ui = ui_mod.Ui;
 
 pub const App = struct {
     allocator: std.mem.Allocator = undefined,
+    io: std.Io = undefined,
     input: Input = .{},
     font: Font = .{},
+    icons: Icons = .{},
     ui: Ui = .{},
     scene: scenes.SceneKind = .storybook,
     scene_state: scenes.State = .{},
@@ -34,6 +39,7 @@ pub const App = struct {
     /// Depth-tested pipeline for 3D canvas cubes.
     pip_3d: sgl.Pipeline = .{},
     font_ok: bool = false,
+    icons_ok: bool = false,
 };
 
 var g: App = .{};
@@ -42,8 +48,9 @@ pub fn global() *App {
     return &g;
 }
 
-pub fn run(allocator: std.mem.Allocator, scene: scenes.SceneKind) void {
+pub fn run(allocator: std.mem.Allocator, scene: scenes.SceneKind, io: std.Io) void {
     g.allocator = allocator;
+    g.io = io;
     g.scene = scene;
     g.scene_state.init();
     g.ui.init(allocator);
@@ -102,6 +109,7 @@ export fn init() void {
     g.pip_3d = sgl.makePipeline(pip3);
 
     loadFont();
+    loadIcons();
     g.last_time = 0;
 }
 
@@ -114,6 +122,16 @@ fn loadFont() void {
     };
     g.font_ok = true;
     std.log.info("loaded font atlas ({d} bytes)", .{bytes.len});
+}
+
+fn loadIcons() void {
+    // Runtime PNG under assets/icons/ (cwd = zig-out/bin when using `zig build run`).
+    // Edit icons.png / icons.yaml and restart — no rebuild needed.
+    g.icons.load(g.allocator, g.io, icon_assets.icons_png, icon_assets.icons_yaml) catch |err| {
+        std.log.err("failed to load icon atlas: {s}", .{@errorName(err)});
+        return;
+    };
+    g.icons_ok = true;
 }
 
 fn trySceneHotkeys() void {
@@ -144,6 +162,12 @@ export fn event(ev: [*c]const sapp.Event) void {
     // Clipboard paste events (requires enable_clipboard).
     if (ev.*.type == .CLIPBOARD_PASTED) {
         g.input.pushPaste(sapp.getClipboardString());
+    }
+    // Soft pointer: release when the window loses focus so OS cursor returns.
+    if (ev.*.type == .FOCUSED) {
+        // re-entering: leave soft_pointer as-is (user may still be mid-session)
+    } else if (ev.*.type == .UNFOCUSED) {
+        g.ui.releaseSoftPointer();
     }
 }
 
@@ -182,7 +206,7 @@ export fn frame() void {
     g.input.now = g.time;
     g.input.tickKeyRepeat();
 
-    g.ui.beginFrame(&g.input, &g.font, g.width, g.height, g.dt, g.time);
+    g.ui.beginFrame(&g.input, &g.font, if (g.icons_ok) &g.icons else null, g.width, g.height, g.dt, g.time);
     trySceneHotkeys();
     scenes.frame(&g);
     g.ui.endFrame();
@@ -201,12 +225,15 @@ export fn frame() void {
         sapp.setClipboardString(zbuf[0..n :0]);
     }
 
-    // Esc: palette/modal may have consumed it; else clear focus; else quit.
+    // Esc layers: modal/palette may have consumed it; else palette close;
+    // else clear text focus; else release soft pointer; else quit.
     if (g.input.keyPressed(.escape) and !g.ui.consumed_escape) {
         if (g.ui.palette_open) {
             g.ui.palette_open = false;
         } else if (!g.ui.focus.isNone()) {
             g.ui.focus = .{};
+        } else if (g.ui.soft_pointer) {
+            g.ui.releaseSoftPointer();
         } else {
             sapp.quit();
         }
@@ -216,6 +243,7 @@ export fn frame() void {
 }
 
 export fn cleanup() void {
+    g.icons.deinit();
     g.font.deinit();
     g.ui.deinit();
     sgl.shutdown();

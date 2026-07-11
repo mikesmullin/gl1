@@ -64,8 +64,13 @@ pub fn slider(ui: anytype, opts: anytype) bool {
         if (ui.mouse_captured_for_drag) {
             ui.mouse_captured_for_drag = false;
             sapp.lockMouse(false);
-            sapp.showMouse(true);
+            // Soft pointer keeps the OS cursor hidden and draws our icon instead.
+            if (!ui.soft_pointer) sapp.showMouse(true);
         }
+    }
+    // Hover: open hand. While scrubbing, soft cursor is hidden (mouse_captured_for_drag).
+    if (st.hot and !ui.drag.eq(i)) {
+        ui.setSoftCursor(.cursor_hand_open);
     }
 
     const t = if (span != 0) std.math.clamp((opts.value.* - opts.min) / span, 0, 1) else 0;

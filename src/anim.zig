@@ -19,6 +19,8 @@ pub const Easing = enum {
     ease_out_quad,
     ease_in_out_quad,
     ease_out_cubic,
+    /// Soft settle with a tiny overshoot (scroll bounce / rubber return).
+    ease_out_back,
 };
 
 pub fn ease(e: Easing, t: f32) f32 {
@@ -32,6 +34,13 @@ pub fn ease(e: Easing, t: f32) f32 {
         .ease_out_cubic => blk: {
             const u = 1 - x;
             break :blk 1 - u * u * u;
+        },
+        .ease_out_back => blk: {
+            // c1 = 1.70158, c3 = c1 + 1
+            const c1: f32 = 1.70158;
+            const c3: f32 = c1 + 1;
+            const u = x - 1;
+            break :blk 1 + c3 * u * u * u + c1 * u * u;
         },
     };
 }

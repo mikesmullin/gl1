@@ -153,5 +153,10 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
         drawGrip(ui, gr, grip_col);
     }
 
+    // After textFieldCore (which may set ibeam): SE grip wins with resize_nwse.
+    if (ed.resizing or gr.contains(ui.input.mouse_x, ui.input.mouse_y)) {
+        ui.setSoftCursor(.cursor_resize_nwse);
+    }
+
     return changed;
 }

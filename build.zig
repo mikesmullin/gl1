@@ -16,6 +16,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const icon_assets = b.createModule(.{
+        .root_source_file = b.path("assets/icons/embed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
         .name = "gl1",
@@ -26,6 +31,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "sokol", .module = sokol_dep.module("sokol") },
                 .{ .name = "font_assets", .module = font_assets },
+                .{ .name = "icon_assets", .module = icon_assets },
             },
         }),
     });
@@ -33,6 +39,12 @@ pub fn build(b: *std.Build) void {
     // Install glyph atlas next to the binary for runtime load.
     b.getInstallStep().dependOn(
         &b.addInstallFile(b.path("assets/fonts/glyphs-outline.bmp"), "bin/assets/fonts/glyphs-outline.bmp").step,
+    );
+    b.getInstallStep().dependOn(
+        &b.addInstallFile(b.path("assets/icons/icons.png"), "bin/assets/icons/icons.png").step,
+    );
+    b.getInstallStep().dependOn(
+        &b.addInstallFile(b.path("assets/icons/icons.yaml"), "bin/assets/icons/icons.yaml").step,
     );
 
     b.installArtifact(exe);

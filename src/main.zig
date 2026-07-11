@@ -64,5 +64,5 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    app.run(arena, scene);
+    app.run(arena, scene, init.io);
 }

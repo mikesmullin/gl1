@@ -4,6 +4,7 @@ const sokol = @import("sokol");
 const sgl = sokol.gl;
 const sapp = sokol.app;
 const font_mod = @import("font.zig");
+const icons_mod = @import("icons.zig");
 
 pub const Color = [4]f32;
 
@@ -30,6 +31,8 @@ pub const Rect = struct {
 pub const Command = union(enum) {
     rect: struct { r: Rect, color: Color },
     text: struct { x: f32, y: f32, size: f32, color: Color, text: []const u8 },
+    /// Icon atlas sprite; `id` is `@intFromEnum(icons.IconId)`.
+    icon: struct { x: f32, y: f32, size: f32, id: u16, color: Color },
     scissor_push: Rect,
     scissor_pop: void,
 };
@@ -75,6 +78,10 @@ pub const List = struct {
         self.push(.{ .text = .{ .x = x, .y = y, .size = size, .color = color, .text = self.intern(s) } });
     }
 
+    pub fn icon(self: *List, x: f32, y: f32, size: f32, id: u16, color: Color) void {
+        self.push(.{ .icon = .{ .x = x, .y = y, .size = size, .id = id, .color = color } });
+    }
+
     fn applyScissor(r: Rect) void {
         // Scissor is in framebuffer pixels; account for DPI.
         const dpi = sapp.dpiScale();
@@ -87,7 +94,7 @@ pub const List = struct {
     }
 
     /// Execute with sokol_gl (top-left ortho already set by caller).
-    pub fn flushSgl(self: *const List, font: *const font_mod.Font) void {
+    pub fn flushSgl(self: *const List, font: *const font_mod.Font, icons: ?*const icons_mod.Icons) void {
         // Nested scissor stack: pop restores parent clip (intersected), never full-screen wipe
         // while an outer clip is still active — that was why scrolled panels leaked.
         var stack: [16]Rect = undefined;
@@ -109,6 +116,12 @@ pub const List = struct {
                 },
                 .text => |c| {
                     font.draw(c.x, c.y, c.size, c.color, c.text);
+                },
+                .icon => |c| {
+                    if (icons) |ic| {
+                        const id: icons_mod.IconId = @enumFromInt(c.id);
+                        ic.draw(c.x, c.y, c.size, id, c.color);
+                    }
                 },
                 .scissor_push => |r| {
                     const parent = if (depth > 0) stack[depth - 1] else fullscreen;
