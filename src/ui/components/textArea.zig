@@ -1,14 +1,21 @@
 //! Multi-line text area with optional resize grip (bottom-right).
+//! During grip-drag, layout stays at the committed size and a lightweight
+//! "ghost" rect previews the new size until mouse-up commits it.
 const std = @import("std");
 const types = @import("../types.zig");
-const te = @import("../text_edit.zig");
-const Color = types.Color;
 const Rect = types.Rect;
-const Id = types.Id;
 
 const textFieldCore = @import("textFieldCore.zig");
 
 const grip: f32 = 12;
+
+fn drawGrip(ui: anytype, gr: Rect, active: bool) void {
+    ui.drawRect(gr, if (active) ui.theme.accent else ui.theme.panel_border);
+    const line = if (active or gr.contains(ui.input.mouse_x, ui.input.mouse_y)) ui.theme.accent else ui.theme.text_dim;
+    ui.drawRect(.{ .x = gr.x + 3, .y = gr.y + gr.h - 4, .w = gr.w - 4, .h = 1 }, line);
+    ui.drawRect(.{ .x = gr.x + 6, .y = gr.y + gr.h - 7, .w = gr.w - 7, .h = 1 }, line);
+    ui.drawRect(.{ .x = gr.x + 9, .y = gr.y + gr.h - 10, .w = gr.w - 10, .h = 1 }, line);
+}
 
 pub fn textArea(ui: anytype, opts: anytype) bool {
     const i = ui.id(opts.id);
@@ -24,7 +31,7 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
     const max_h: f32 = if (@hasField(@TypeOf(opts), "max_height") and opts.max_height > 0) opts.max_height else 10000;
 
     var body_w: f32 = if (@hasField(@TypeOf(opts), "w")) opts.w else 280;
-    // Apply user resize (from corner grip)
+    // Committed user resize only (not live drag preview — avoids layout thrash).
     if (ed.user_w > 0) body_w = ed.user_w;
     if (ed.user_h > 0) body_h = ed.user_h;
     body_h = @min(body_h, max_h);
@@ -45,27 +52,49 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
     ui.drawText(r.x, r.y, size, ui.theme.text_dim, opts.label);
     const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = body_w, .h = view_h };
 
-    // Resize grip (bottom-right of the box)
-    const gr = Rect{ .x = box.x + box.w - grip, .y = box.y + box.h - grip, .w = grip, .h = grip };
-    const gid = ui.idFlat("ta_grip");
-    // hit-test grip first
+    // Grip hit target: on the live ghost while resizing, else committed box corner.
+    var gr = Rect{ .x = box.x + box.w - grip, .y = box.y + box.h - grip, .w = grip, .h = grip };
+    if (ed.resizing and ed.resize_preview_w > 0 and ed.resize_preview_h > 0) {
+        gr = .{
+            .x = box.x + ed.resize_preview_w - grip,
+            .y = box.y + ed.resize_preview_h - grip,
+            .w = grip,
+            .h = grip,
+        };
+    }
+
     if (ui.input.mousePressed(.left) and gr.contains(ui.input.mouse_x, ui.input.mouse_y)) {
         ed.resizing = true;
         ed.resize_anchor_x = ui.input.mouse_x;
         ed.resize_anchor_y = ui.input.mouse_y;
         ed.resize_start_w = body_w;
         ed.resize_start_h = body_h;
+        ed.resize_preview_w = body_w;
+        ed.resize_preview_h = body_h;
         if (ed.user_w <= 0) ed.user_w = body_w;
         if (ed.user_h <= 0) ed.user_h = body_h;
     }
+
     if (ed.resizing) {
         if (ui.input.mouseDown(.left)) {
             const dx = ui.input.mouse_x - ed.resize_anchor_x;
             const dy = ui.input.mouse_y - ed.resize_anchor_y;
-            ed.user_w = @max(80, ed.resize_start_w + dx);
-            ed.user_h = std.math.clamp(ed.resize_start_h + dy, lh + 12, max_h);
+            ed.resize_preview_w = @max(80, ed.resize_start_w + dx);
+            ed.resize_preview_h = std.math.clamp(ed.resize_start_h + dy, lh + 12, max_h);
+            // Keep grip under cursor for the rest of this frame's draw.
+            gr = .{
+                .x = box.x + ed.resize_preview_w - grip,
+                .y = box.y + ed.resize_preview_h - grip,
+                .w = grip,
+                .h = grip,
+            };
         } else {
+            // Commit on release — next frame layout uses the new size.
+            ed.user_w = ed.resize_preview_w;
+            ed.user_h = ed.resize_preview_h;
             ed.resizing = false;
+            ed.resize_preview_w = 0;
+            ed.resize_preview_h = 0;
         }
     }
 
@@ -85,26 +114,34 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
         }
     }
 
-    // If currently resizing, skip text interaction this frame on the grip
-    const changed = if (ed.resizing) false else textFieldCore.textFieldCore(ui, .{
-        .id_key = i.a,
-        .box = box,
-        .buf = opts.buf,
-        .len = opts.len,
-        .multiline = true,
-        .size = size,
-        .scroll_y = scroll,
-    });
-
-    // Draw grip (after field so it's visible on top of border)
-    ui.drawRect(gr, if (ed.resizing) ui.theme.accent else ui.theme.panel_border);
-    // diagonal lines
-    const gcol = if (ed.resizing or gr.contains(ui.input.mouse_x, ui.input.mouse_y)) ui.theme.accent else ui.theme.text_dim;
-    _ = gcol;
-    ui.drawRect(.{ .x = gr.x + 3, .y = gr.y + gr.h - 4, .w = gr.w - 4, .h = 1 }, ui.theme.text_dim);
-    ui.drawRect(.{ .x = gr.x + 6, .y = gr.y + gr.h - 7, .w = gr.w - 7, .h = 1 }, ui.theme.text_dim);
-    ui.drawRect(.{ .x = gr.x + 9, .y = gr.y + gr.h - 10, .w = gr.w - 10, .h = 1 }, ui.theme.text_dim);
-    _ = gid;
+    var changed = false;
+    if (ed.resizing) {
+        // Ghost: empty field shell at the preview size (no text/layout thrash).
+        const ghost = Rect{
+            .x = box.x,
+            .y = box.y,
+            .w = ed.resize_preview_w,
+            .h = ed.resize_preview_h,
+        };
+        // Dim placeholder of the committed slot so layout space stays visible.
+        ui.drawRectBorder(box, .{ 0.06, 0.07, 0.09, 0.35 }, ui.theme.panel_border, 1);
+        // Live preview shell (matches input chrome, accent border while active).
+        ui.drawRectBorder(ghost, ui.theme.input_bg, ui.theme.accent, 1);
+        // Optional label hint inside ghost
+        ui.drawText(ghost.x + 6, ghost.y + 4, size, ui.theme.text_dim, "…");
+        drawGrip(ui, gr, true);
+    } else {
+        changed = textFieldCore.textFieldCore(ui, .{
+            .id_key = i.a,
+            .box = box,
+            .buf = opts.buf,
+            .len = opts.len,
+            .multiline = true,
+            .size = size,
+            .scroll_y = scroll,
+        });
+        drawGrip(ui, gr, false);
+    }
 
     return changed;
 }

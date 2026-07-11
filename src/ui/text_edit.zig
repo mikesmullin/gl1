@@ -69,12 +69,15 @@ pub const Edit = struct {
     /// User-resized dimensions for multi-line (0 = use layout default).
     user_w: f32 = 0,
     user_h: f32 = 0,
-    /// Resize grip drag.
+    /// Resize grip drag. Layout keeps committed `user_w`/`user_h` until release;
+    /// `resize_preview_*` drives the live ghost rectangle during the drag.
     resizing: bool = false,
     resize_anchor_x: f32 = 0,
     resize_anchor_y: f32 = 0,
     resize_start_w: f32 = 0,
     resize_start_h: f32 = 0,
+    resize_preview_w: f32 = 0,
+    resize_preview_h: f32 = 0,
 
     pub fn primary(self: *Edit) *Range {
         return &self.carets[0];
