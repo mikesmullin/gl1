@@ -30,11 +30,13 @@ const palette_cmds = [_][]const u8{
     "Action: Log hello",
     "Action: Toast hello",
     "Action: Toggle console",
-    "Theme: Toggle cool dark",
+    "Theme: Cycle (dark / cool / warm)",
 };
 
 pub fn frame(a: *app.App) void {
-    a.ui.theme = if (a.scene_state.theme_cool) theme_mod.dark_cool else theme_mod.dark;
+    // Keep legacy bool in sync for any code still reading theme_cool.
+    a.scene_state.theme_cool = a.scene_state.theme_id == 1;
+    a.ui.theme = theme_mod.byIndex(a.scene_state.theme_id);
 
     switch (a.scene) {
         .triangle => triangle.frame(a),
@@ -62,7 +64,7 @@ fn runCommandPalette(a: *app.App) void {
             6 => u.log("palette: hello"),
             7 => u.toast("Hello from palette", .ok, 1.5),
             8 => a.scene_state.show_console = !a.scene_state.show_console,
-            9 => a.scene_state.theme_cool = !a.scene_state.theme_cool,
+            9 => a.scene_state.theme_id = (a.scene_state.theme_id + 1) % 3,
             else => {},
         }
         u.log("palette");

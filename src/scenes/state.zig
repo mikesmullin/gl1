@@ -38,8 +38,11 @@ pub const DeskWin = struct {
 pub const State = struct {
     selected: usize = 0,
     checked: bool = true,
+    checked_b: bool = false,
+    checked_c: bool = true,
     toggled: bool = false,
     radio_group: u32 = 0,
+    radio_group_b: u32 = 1,
     speed: f32 = 0.45,
     volume: f32 = 0.7,
     clicks: u32 = 0,
@@ -55,8 +58,15 @@ pub const State = struct {
     collab_b: bool = false,
     list_sel: usize = 1,
     spinner_val: f32 = 12,
+    /// 0=dark, 1=cool, 2=warm (see theme.byIndex).
+    theme_id: u32 = 0,
+    /// Legacy bool kept in sync with theme_id for inspector/palette toggles.
     theme_cool: bool = false,
     color_idx: usize = 0,
+    /// Storybook splitter demo left width.
+    sb_split_w: f32 = 160,
+    sb_menu_status: [48]u8 = undefined,
+    sb_menu_status_len: usize = 0,
     tree_open: bool = true,
     entity_name: [32]u8 = undefined,
     entity_name_len: usize = 0,

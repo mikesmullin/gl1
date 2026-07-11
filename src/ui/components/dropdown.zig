@@ -9,9 +9,11 @@ const Id = types.Id;
 pub fn dropdown(ui: anytype, opts: anytype) bool {
     const i = ui.id(opts.id);
     const size = ui.theme.font_size;
-    const r = ui.alloc(opts.w, ui.theme.row_h + 14);
+    // Match textInput: ~5–6px gap between label and field.
+    const label_gap: f32 = 6;
+    const r = ui.alloc(opts.w, ui.theme.row_h + 14 + label_gap);
     ui.drawText(r.x, r.y, size, ui.theme.text_dim, opts.label);
-    const box = Rect{ .x = r.x, .y = r.y + 12, .w = opts.w, .h = ui.theme.row_h };
+    const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = opts.w, .h = ui.theme.row_h };
     const st = ui.interact(i, box, false);
     if (st.clicked) opts.open.* = !opts.open.*;
 

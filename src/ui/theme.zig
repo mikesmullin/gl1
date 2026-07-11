@@ -51,3 +51,26 @@ pub const dark_cool = Theme{
     .slider_fill = .{ 0.30, 0.50, 0.75, 1 },
     .selected = .{ 0.18, 0.28, 0.40, 1 },
 };
+
+/// Warm amber-accent dark variant (third storybook palette).
+pub const dark_warm = Theme{
+    .bg = .{ 0.11, 0.09, 0.08, 1 },
+    .panel = .{ 0.16, 0.13, 0.11, 1 },
+    .panel_border = .{ 0.32, 0.26, 0.20, 1 },
+    .accent = .{ 0.92, 0.62, 0.28, 1 },
+    .accent_hot = .{ 1.0, 0.72, 0.38, 1 },
+    .slider_fill = .{ 0.70, 0.45, 0.22, 1 },
+    .selected = .{ 0.35, 0.24, 0.14, 1 },
+    .button = .{ 0.22, 0.18, 0.15, 1 },
+    .button_hot = .{ 0.30, 0.24, 0.18, 1 },
+    .sidebar = .{ 0.13, 0.11, 0.09, 1 },
+};
+
+/// Resolve theme by index: 0=dark, 1=cool, 2=warm.
+pub fn byIndex(i: u32) Theme {
+    return switch (i) {
+        1 => dark_cool,
+        2 => dark_warm,
+        else => dark,
+    };
+}

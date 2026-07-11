@@ -51,14 +51,14 @@ pub fn frame(a: *app.App) void {
     if (u.menuDropdown(.{
         .id = "view",
         .label = "View",
-        .items = &.{ "Storybook", "Inspector", "Canvas", "Toggle console", "Toggle cool theme" },
+        .items = &.{ "Storybook", "Inspector", "Canvas", "Toggle console", "Cycle theme" },
     })) |vi| {
         switch (vi) {
             0 => a.scene = .storybook,
             1 => a.scene = .inspector,
             2 => a.scene = .canvas,
             3 => st.show_console = !st.show_console,
-            4 => st.theme_cool = !st.theme_cool,
+            4 => st.theme_id = (st.theme_id + 1) % 3,
             else => {},
         }
     }

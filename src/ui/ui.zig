@@ -129,6 +129,10 @@ pub const Ui = struct {
     panel_scroll_stack: [8]bool = @splat(false),
     panel_scroll_depth: usize = 0,
 
+    /// Nested beginScroll frames (viewport + id for endScroll scrollbar).
+    scroll_frames: [8]struct { id: Id = .{}, view: Rect = .{} } = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
+    scroll_frame_depth: usize = 0,
+
     pub const ToastKind = enum { info, ok, warn, err };
     pub const Toast = struct {
         text: [96]u8 = undefined,
@@ -178,6 +182,7 @@ pub const Ui = struct {
         self.id_depth = 0;
         self.curr_count = 0;
         self.panel_scroll_depth = 0;
+        self.scroll_frame_depth = 0;
         self.cmds.clear();
         self.front.clear();
         self.tooltip_set = false;
@@ -520,12 +525,19 @@ pub const Ui = struct {
         var y = opts.y;
         var w = opts.w;
         var h = opts.h;
-        if (w == 0 and h == 0 and parent.kind != .free) {
-            // Nest: take remaining width of parent.
-            x = parent.origin_x + parent.pad;
-            y = parent.cursor_y;
-            w = parent.width - 2 * parent.pad;
-            h = parent.height; // soft
+        // Nest into parent when no absolute origin was given.
+        if (x == 0 and y == 0 and parent.kind != .free) {
+            if (parent.kind == .vstack) {
+                x = parent.origin_x + parent.pad;
+                y = parent.cursor_y;
+                if (w == 0) w = parent.width - 2 * parent.pad;
+                if (h == 0) h = parent.height; // soft
+            } else if (parent.kind == .hstack) {
+                x = parent.cursor_x;
+                y = parent.origin_y + parent.pad;
+                if (w == 0) w = 160;
+                if (h == 0) h = parent.height - 2 * parent.pad;
+            }
         }
         if (self.layout_depth < MaxLayout) {
             self.layout_stack[self.layout_depth] = .{
@@ -567,18 +579,18 @@ pub const Ui = struct {
         var y = opts.y;
         var w = opts.w;
         var h = opts.h;
-        // Nest into parent layout when no explicit box was provided (same convention as beginVStack).
-        if (w == 0 and h == 0 and parent.kind != .free) {
+        // Nest into parent when no absolute origin was given.
+        if (x == 0 and y == 0 and parent.kind != .free) {
             if (parent.kind == .vstack) {
                 x = parent.origin_x + parent.pad;
                 y = parent.cursor_y;
-                w = parent.width - 2 * parent.pad;
-                h = self.theme.row_h + 2 * pad;
+                if (w == 0) w = parent.width - 2 * parent.pad;
+                if (h == 0) h = self.theme.row_h + 2 * pad;
             } else if (parent.kind == .hstack) {
                 x = parent.cursor_x;
                 y = parent.origin_y + parent.pad;
-                w = parent.width;
-                h = parent.height - 2 * parent.pad;
+                if (w == 0) w = parent.width;
+                if (h == 0) h = parent.height - 2 * parent.pad;
             }
         } else {
             if (h == 0) h = self.theme.row_h + 2 * pad;
@@ -1009,6 +1021,7 @@ pub const Ui = struct {
     }
 
     /// Scrollable region with GPU scissor clip + wheel scroll when hovered.
+    /// Draws a vertical scrollbar when content exceeds the viewport.
     pub fn beginScroll(self: *Ui, opts: struct { id: []const u8, x: f32, y: f32, w: f32, h: f32 }) f32 {
         const i = self.id(opts.id);
         const r = self.place(opts.x, opts.y, opts.w, opts.h);
@@ -1023,14 +1036,19 @@ pub const Ui = struct {
             self.eatScroll();
         }
         const scroll = gop.value_ptr.*;
-        // Clip subsequent draw commands to the scroll viewport (inset for border).
-        const clip = Rect{ .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 };
+        // Leave 8px for the scrollbar track on the right.
+        const sb_w: f32 = 8;
+        const clip = Rect{ .x = r.x + 1, .y = r.y + 1, .w = @max(0, r.w - 2 - sb_w), .h = r.h - 2 };
         self.cmds.push(.{ .scissor_push = .{ .x = clip.x, .y = clip.y, .w = clip.w, .h = clip.h } });
+        if (self.scroll_frame_depth < self.scroll_frames.len) {
+            self.scroll_frames[self.scroll_frame_depth] = .{ .id = i, .view = r };
+            self.scroll_frame_depth += 1;
+        }
         self.pushId(opts.id);
         self.beginVStack(.{
             .x = r.x,
             .y = r.y - scroll,
-            .w = r.w,
+            .w = @max(0, r.w - sb_w),
             .h = r.h + scroll,
             .pad = self.theme.pad,
             .gap = self.theme.gap,
@@ -1039,9 +1057,41 @@ pub const Ui = struct {
     }
 
     pub fn endScroll(self: *Ui) void {
-        _ = self.endVStack();
+        const content = self.endVStack();
         self.popId();
         self.cmds.push(.{ .scissor_pop = {} });
+
+        if (self.scroll_frame_depth == 0) return;
+        self.scroll_frame_depth -= 1;
+        const frame = self.scroll_frames[self.scroll_frame_depth];
+        const r = frame.view;
+        const sb_w: f32 = 8;
+        const view_h = r.h - 2;
+        // Content height from layout (includes pad); compare to viewport.
+        const content_h = content.h;
+        const max_scroll = @max(0, content_h - view_h);
+        if (max_scroll > 0) {
+            if (self.scroll_y.getPtr(frame.id.a)) |sy| {
+                if (sy.* > max_scroll) sy.* = max_scroll;
+            }
+        }
+        const scroll = self.scroll_y.get(frame.id.a) orelse 0;
+        const track = Rect{
+            .x = r.x + r.w - sb_w - 1,
+            .y = r.y + 1,
+            .w = sb_w,
+            .h = view_h,
+        };
+        self.drawRect(track, self.theme.slider_track);
+        if (max_scroll > 0 and content_h > 0) {
+            const thumb_h = @max(16, view_h * (view_h / content_h));
+            const t = if (max_scroll > 0) scroll / max_scroll else 0;
+            const thumb_y = track.y + (view_h - thumb_h) * t;
+            self.drawRect(.{ .x = track.x + 1, .y = thumb_y, .w = sb_w - 2, .h = thumb_h }, self.theme.accent);
+        } else {
+            // Still show a full-height thumb so the scrollbar is visible as chrome.
+            self.drawRect(.{ .x = track.x + 1, .y = track.y, .w = sb_w - 2, .h = view_h }, self.theme.panel_border);
+        }
     }
 
     /// Toggle switch (checkbox alternative).
@@ -1129,15 +1179,22 @@ pub const Ui = struct {
         const my = (self.height - mh) * 0.5;
         const r = Rect{ .x = mx, .y = my, .w = mw, .h = mh };
         self.remember(self.id(opts.id), r);
-        self.drawRectBorder(r, self.theme.modal, self.theme.accent, 2);
+        const border_t: f32 = 2;
+        // Fill first, then title chrome inset so the accent border wraps the whole modal including the title bar.
+        self.drawRect(r, self.theme.modal);
 
-        // Title bar
+        // Title bar (inset so outer border stays visible)
         const th = self.theme.row_h;
-        self.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = th }, .{ 0.12, 0.13, 0.16, 1 });
-        self.drawText(r.x + self.theme.pad, r.y + 6, self.theme.title_font_size, self.theme.text, opts.title);
+        self.drawRect(.{
+            .x = r.x + border_t,
+            .y = r.y + border_t,
+            .w = r.w - 2 * border_t,
+            .h = th - border_t,
+        }, .{ 0.12, 0.13, 0.16, 1 });
+        self.drawText(r.x + self.theme.pad + border_t, r.y + 6, self.theme.title_font_size, self.theme.text, opts.title);
 
         // Close button
-        const cr = Rect{ .x = r.x + r.w - 28, .y = r.y + 4, .w = 22, .h = 20 };
+        const cr = Rect{ .x = r.x + r.w - 28 - border_t, .y = r.y + 4, .w = 22, .h = 20 };
         const ci = self.id("modal_close");
         const cst = self.interact(ci, cr, false);
         self.drawRect(cr, if (cst.hot) self.theme.danger else self.theme.button);
@@ -1146,6 +1203,12 @@ pub const Ui = struct {
             opts.open.* = false;
             return false;
         }
+
+        // Accent border on top so it frames title + body.
+        self.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = border_t }, self.theme.accent); // top
+        self.drawRect(.{ .x = r.x, .y = r.y + r.h - border_t, .w = r.w, .h = border_t }, self.theme.accent); // bottom
+        self.drawRect(.{ .x = r.x, .y = r.y, .w = border_t, .h = r.h }, self.theme.accent); // left
+        self.drawRect(.{ .x = r.x + r.w - border_t, .y = r.y, .w = border_t, .h = r.h }, self.theme.accent); // right
 
         self.pushId(opts.id);
         self.beginVStack(.{
@@ -1165,13 +1228,15 @@ pub const Ui = struct {
     }
 
     /// Top menubar strip. Returns height used.
-    pub fn beginMenubar(self: *Ui, opts: struct { id: []const u8 = "menubar" }) f32 {
+    /// Optional `x`/`y`/`w` place a local strip (e.g. storybook mini-window); defaults are full window top.
+    pub fn beginMenubar(self: *Ui, opts: struct { id: []const u8 = "menubar", x: f32 = 0, y: f32 = 0, w: f32 = 0 }) f32 {
         const h = self.theme.menubar_h;
-        const r = Rect{ .x = 0, .y = 0, .w = self.width, .h = h };
+        const bw = if (opts.w > 0) opts.w else self.width;
+        const r = Rect{ .x = opts.x, .y = opts.y, .w = bw, .h = h };
         self.drawRect(r, self.theme.menubar);
-        self.drawRect(.{ .x = 0, .y = h - 1, .w = self.width, .h = 1 }, self.theme.panel_border);
+        self.drawRect(.{ .x = r.x, .y = r.y + h - 1, .w = r.w, .h = 1 }, self.theme.panel_border);
         self.pushId(opts.id);
-        self.beginHStack(.{ .x = 0, .y = 0, .w = self.width, .h = h, .pad = 4, .gap = 2 });
+        self.beginHStack(.{ .x = r.x, .y = r.y, .w = r.w, .h = h, .pad = 4, .gap = 2 });
         return h;
     }
 
@@ -1469,13 +1534,15 @@ pub const Ui = struct {
         if (opts.open) |op| {
             const arrow: []const u8 = if (op.*) "v" else ">";
             self.drawText(x, full.y + 5, self.theme.font_size, self.theme.accent, arrow);
-            if (st.clicked and self.input.mouse_x < x + 18) {
+            // Whole row toggles expand/collapse (arrow or label) — easier hit target.
+            if (st.clicked) {
                 op.* = !op.*;
                 toggled = true;
             }
             x += 16;
         }
         self.drawText(x, full.y + 5, self.theme.font_size, self.theme.text, opts.label);
+        // Expandable nodes consume the click as a toggle; leaves report selection clicks.
         const clicked = st.clicked and !toggled;
         return .{ .clicked = clicked, .toggled = toggled };
     }
