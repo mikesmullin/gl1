@@ -606,7 +606,7 @@ pub fn frame(a: *app.App) void {
             // Also respect horizontal FOV on wide screens.
             const aspect = w / @max(h, 1);
             if (aspect > 1) {
-                const half_h_fit = @atan(@tan(half_fit) * aspect);
+                const half_h_fit = std.math.atan(@tan(half_fit) * aspect);
                 dist = @max(dist, radius / @tan(half_h_fit));
             }
             dist = std.math.clamp(dist, 80, 2500);
