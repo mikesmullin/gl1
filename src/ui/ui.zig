@@ -89,6 +89,8 @@ pub const Ui = struct {
 
     /// True if a modal consumed Esc this frame (app should not quit).
     consumed_escape: bool = false,
+    /// Wheel already claimed this frame (stop bubbling to lower widgets/scene).
+    scroll_eaten: bool = false,
 
     /// Active drag (splitter, etc.).
     drag: Id = .{},
@@ -179,6 +181,7 @@ pub const Ui = struct {
         self.tooltip_set = false;
         self.tooltip_len = 0;
         self.consumed_escape = false;
+        self.scroll_eaten = false;
         // Clear drag when mouse released.
         if (!input.mouseDown(.left) and !self.drag.isNone()) {
             self.drag = .{};
@@ -404,6 +407,30 @@ pub const Ui = struct {
         return .{ .x = x, .y = y, .w = w, .h = h };
     }
 
+    // --- Wheel / scroll capture ---------------------------------------------
+
+    /// Remaining wheel delta for *content* this frame.
+    /// Returns 0 if already eaten, or if the command palette is open (overlay
+    /// owns the wheel until it calls `eatScroll`).
+    pub fn wheelY(self: *const Ui) f32 {
+        if (self.scroll_eaten) return 0;
+        if (self.palette_open) return 0;
+        return self.input.scroll_y;
+    }
+
+    /// Wheel delta for overlay chrome (command palette). Ignores the
+    /// palette_open content block so the palette can still scroll.
+    pub fn wheelYOverlay(self: *const Ui) f32 {
+        if (self.scroll_eaten) return 0;
+        return self.input.scroll_y;
+    }
+
+    /// Stop the wheel from bubbling to anything else this frame.
+    pub fn eatScroll(self: *Ui) void {
+        self.scroll_eaten = true;
+        self.input.scroll_y = 0;
+    }
+
     // --- Drawing primitives (queue → RenderCommand list) --------------------
 
     pub fn drawRect(self: *Ui, r: Rect, color: Color) void {
@@ -619,10 +646,12 @@ pub const Ui = struct {
             const gop = self.scroll_y.getOrPut(i.a) catch null;
             if (gop) |g| {
                 if (!g.found_existing) g.value_ptr.* = 0;
-                if (body.contains(self.input.mouse_x, self.input.mouse_y)) {
-                    g.value_ptr.* -= self.input.scroll_y * 28;
+                const dy = self.wheelY();
+                if (dy != 0 and body.contains(self.input.mouse_x, self.input.mouse_y)) {
+                    g.value_ptr.* -= dy * 28;
                     if (g.value_ptr.* < 0) g.value_ptr.* = 0;
                     if (g.value_ptr.* > 4000) g.value_ptr.* = 4000;
+                    self.eatScroll();
                 }
                 scroll_off = g.value_ptr.*;
             }
@@ -853,24 +882,25 @@ pub const Ui = struct {
         const list_y = qbox.y + row_h + gap;
         const list_r = Rect{ .x = box.x + pad, .y = list_y, .w = pw - pad * 2, .h = list_viewport_h };
 
-        // Wheel: scroll the list only — does not change selection. Scrollbar moves
-        // immediately. Hover (below) selects the row under the cursor instead.
-        if (box.contains(self.input.mouse_x, self.input.mouse_y) and self.input.scroll_y != 0) {
-            const steps_f = @abs(self.input.scroll_y);
-            var steps: usize = @intFromFloat(@floor(steps_f));
-            if (steps == 0) steps = 1;
-            var s: usize = 0;
-            while (s < steps) : (s += 1) {
-                if (self.input.scroll_y > 0) {
-                    if (self.palette_scroll > 0) self.palette_scroll -= 1;
-                } else {
-                    if (self.palette_scroll < max_scroll) self.palette_scroll += 1;
+        // Wheel: scroll the list only — does not change selection. Content under
+        // the palette already sees wheelY()==0; we still eatScroll so nothing
+        // later in the frame can use residual wheel.
+        const dy = self.wheelYOverlay();
+        if (dy != 0) {
+            if (box.contains(self.input.mouse_x, self.input.mouse_y)) {
+                const steps_f = @abs(dy);
+                var steps: usize = @intFromFloat(@floor(steps_f));
+                if (steps == 0) steps = 1;
+                var s: usize = 0;
+                while (s < steps) : (s += 1) {
+                    if (dy > 0) {
+                        if (self.palette_scroll > 0) self.palette_scroll -= 1;
+                    } else {
+                        if (self.palette_scroll < max_scroll) self.palette_scroll += 1;
+                    }
                 }
             }
-            self.input.scroll_y = 0;
-        } else if (self.input.scroll_y != 0) {
-            // Overlay open: don't scroll the scene underneath.
-            self.input.scroll_y = 0;
+            self.eatScroll();
         }
 
         // Only keyboard nav forces the selection into the viewport (so arrowing
@@ -976,9 +1006,11 @@ pub const Ui = struct {
         self.drawRectBorder(r, self.theme.panel, self.theme.panel_border, 1);
         const gop = self.scroll_y.getOrPut(i.a) catch return 0;
         if (!gop.found_existing) gop.value_ptr.* = 0;
-        if (r.contains(self.input.mouse_x, self.input.mouse_y)) {
-            gop.value_ptr.* -= self.input.scroll_y * 24;
+        const dy = self.wheelY();
+        if (dy != 0 and r.contains(self.input.mouse_x, self.input.mouse_y)) {
+            gop.value_ptr.* -= dy * 24;
             if (gop.value_ptr.* < 0) gop.value_ptr.* = 0;
+            self.eatScroll();
         }
         const scroll = gop.value_ptr.*;
         // Clip subsequent draw commands to the scroll viewport (inset for border).

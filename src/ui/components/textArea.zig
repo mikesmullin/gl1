@@ -104,8 +104,10 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
         const gop = ui.scroll_y.getOrPut(i.a) catch null;
         if (gop) |g| {
             if (!g.found_existing) g.value_ptr.* = 0;
-            if (box.contains(ui.input.mouse_x, ui.input.mouse_y) and !gr.contains(ui.input.mouse_x, ui.input.mouse_y)) {
-                g.value_ptr.* -= ui.input.scroll_y * lh;
+            const dy = ui.wheelY();
+            if (dy != 0 and box.contains(ui.input.mouse_x, ui.input.mouse_y) and !gr.contains(ui.input.mouse_x, ui.input.mouse_y)) {
+                g.value_ptr.* -= dy * lh;
+                ui.eatScroll();
             }
             const max_scroll = content_h - view_h + 4;
             if (g.value_ptr.* < 0) g.value_ptr.* = 0;

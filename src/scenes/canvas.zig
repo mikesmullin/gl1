@@ -12,10 +12,12 @@ pub fn frame(a: *app.App) void {
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — pan (MMB/Space+LMB)  zoom (wheel)");
     u.drawText(16, 40, 1.5, u.theme.text_dim, "Grid in world space; entities as colored quads");
 
-    // Zoom
-    if (a.input.scroll_y != 0) {
-        const factor: f32 = if (a.input.scroll_y > 0) 1.1 else 1.0 / 1.1;
+    // Zoom (respect overlay scroll capture — e.g. command palette)
+    const dy = u.wheelY();
+    if (dy != 0) {
+        const factor: f32 = if (dy > 0) 1.1 else 1.0 / 1.1;
         st.canvas_zoom = std.math.clamp(st.canvas_zoom * factor, 0.25, 8);
+        u.eatScroll();
     }
 
     // Pan
