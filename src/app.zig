@@ -31,6 +31,8 @@ pub const App = struct {
     dt: f32 = 0,
     last_time: f64 = 0,
     pip_alpha: sgl.Pipeline = .{},
+    /// Depth-tested pipeline for 3D canvas cubes.
+    pip_3d: sgl.Pipeline = .{},
     font_ok: bool = false,
 };
 
@@ -73,7 +75,7 @@ export fn init() void {
         .max_commands = 64 * 1024,
     });
 
-    // Alpha-blended pipeline for text / translucent rects.
+    // Alpha-blended pipeline for text / translucent rects (2D UI).
     var pip_desc: sg.PipelineDesc = .{};
     pip_desc.colors[0].blend = .{
         .enabled = true,
@@ -83,6 +85,21 @@ export fn init() void {
         .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
     };
     g.pip_alpha = sgl.makePipeline(pip_desc);
+
+    // 3D pipeline: depth test/write for solid cubes in the canvas scene.
+    var pip3: sg.PipelineDesc = .{};
+    pip3.depth = .{
+        .compare = .LESS_EQUAL,
+        .write_enabled = true,
+    };
+    pip3.colors[0].blend = .{
+        .enabled = true,
+        .src_factor_rgb = .SRC_ALPHA,
+        .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+        .src_factor_alpha = .ONE,
+        .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+    };
+    g.pip_3d = sgl.makePipeline(pip3);
 
     loadFont();
     g.last_time = 0;
@@ -146,6 +163,11 @@ export fn frame() void {
     pass_action.colors[0] = .{
         .load_action = .CLEAR,
         .clear_value = .{ .r = bg[0], .g = bg[1], .b = bg[2], .a = 1 },
+    };
+    // Depth clear for canvas 3D cubes (harmless for pure 2D scenes).
+    pass_action.depth = .{
+        .load_action = .CLEAR,
+        .clear_value = 1.0,
     };
 
     sg.beginPass(.{ .action = pass_action, .swapchain = sglue.swapchain() });

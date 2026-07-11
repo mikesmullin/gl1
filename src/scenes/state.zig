@@ -70,11 +70,24 @@ pub const State = struct {
     notes_len: usize = 0,
     show_console: bool = true,
     console_h: f32 = 120,
-    /// Canvas scene pan/zoom.
+    /// Canvas scene — orbit camera (Blender-ish mini viewport).
+    /// Target point the camera looks at / orbits around.
+    canvas_tx: f32 = 0,
+    canvas_ty: f32 = 0,
+    canvas_tz: f32 = 0,
+    /// Orbit angles (radians). Default ≈ top view (pitch nearly -π/2).
+    canvas_yaw: f32 = 0,
+    canvas_pitch: f32 = -1.45,
+    /// Distance from target.
+    canvas_dist: f32 = 420,
+    /// Legacy 2D pan/zoom kept for any old refs; canvas uses 3D camera now.
     canvas_ox: f32 = 0,
     canvas_oy: f32 = 0,
     canvas_zoom: f32 = 1,
     canvas_panning: bool = false,
+    canvas_orbiting: bool = false,
+    /// Selected entity index in canvas demo world (-1 = none).
+    canvas_sel: i32 = -1,
 
     pub fn init(self: *State) void {
         const hello = "hello gl1";

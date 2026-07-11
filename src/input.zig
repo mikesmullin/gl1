@@ -274,6 +274,17 @@ pub const Input = struct {
             ._8 => .eight,
             ._9 => .nine,
             ._0 => .zero,
+            // Numpad (Blender-style view hotkeys, etc.)
+            .KP_1 => .one,
+            .KP_2 => .two,
+            .KP_3 => .three,
+            .KP_4 => .four,
+            .KP_5 => .five,
+            .KP_6 => .six,
+            .KP_7 => .seven,
+            .KP_8 => .eight,
+            .KP_9 => .nine,
+            .KP_0 => .zero,
             else => null,
         };
     }
