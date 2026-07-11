@@ -303,11 +303,59 @@ fn frameInspector(a: *app.App) void {
     const u = &a.ui;
     const st = &a.scene_state;
 
-    // Menubar
+    // Menubar with real dropdowns
     _ = u.beginMenubar(.{});
-    if (u.menuItem(.{ .id = "m_file", .label = "File" })) u.toast("File menu (stub)", .info, 1.2);
-    if (u.menuItem(.{ .id = "m_edit", .label = "Edit" })) u.toast("Edit menu (stub)", .info, 1.2);
-    if (u.menuItem(.{ .id = "m_view", .label = "View" })) u.toast("View menu (stub)", .info, 1.2);
+    if (u.menuDropdown(.{
+        .id = "file",
+        .label = "File",
+        .items = &.{ "New", "Open…", "Save", "Command palette", "Quit" },
+    })) |fi| {
+        switch (fi) {
+            0 => {
+                u.toast("New (stub)", .info, 1.2);
+                u.log("file: new");
+            },
+            1 => {
+                u.toast("Open (stub)", .info, 1.2);
+                u.log("file: open");
+            },
+            2 => {
+                u.toast("Saved (stub)", .ok, 1.2);
+                u.log("file: save");
+            },
+            3 => {
+                u.palette_open = true;
+                u.palette_query_len = 0;
+            },
+            4 => @import("sokol").app.quit(),
+            else => {},
+        }
+    }
+    if (u.menuDropdown(.{
+        .id = "edit",
+        .label = "Edit",
+        .items = &.{ "Undo", "Redo", "Cut", "Copy", "Paste" },
+    })) |ei| {
+        const names = [_][]const u8{ "Undo", "Redo", "Cut", "Copy", "Paste" };
+        if (ei < names.len) {
+            u.toast(names[ei], .info, 1.0);
+            u.log(names[ei]);
+        }
+    }
+    if (u.menuDropdown(.{
+        .id = "view",
+        .label = "View",
+        .items = &.{ "Storybook", "Inspector", "Canvas", "Toggle console", "Toggle cool theme" },
+    })) |vi| {
+        switch (vi) {
+            0 => a.scene = .storybook,
+            1 => a.scene = .inspector,
+            2 => a.scene = .canvas,
+            3 => st.show_console = !st.show_console,
+            4 => st.theme_cool = !st.theme_cool,
+            else => {},
+        }
+    }
     if (u.menuItem(.{ .id = "m_help", .label = "Help" })) {
         st.modal_open = true;
     }
@@ -370,10 +418,19 @@ fn frameInspector(a: *app.App) void {
             }
         }
 
-        // Right-click list → context menu (prefer this frame's rect, else previous).
+        // Right-click list (or empty area below tree) → context menu.
         const list_id = u.id("entlist");
         if (u.currRectOf(list_id) orelse u.prevRectOf("entlist")) |lr| {
             _ = u.rightClickOpen("ent_ctx", lr);
+        }
+        // Also open when right-clicking the entity panel body (easier hit target).
+        if (u.input.mousePressed(.right)) {
+            const panel_r = u.currRectOf(u.id("ents")) orelse u.prevRectOf("ents");
+            if (panel_r) |pr| {
+                if (pr.contains(u.input.mouse_x, u.input.mouse_y)) {
+                    u.openContextMenu("ent_ctx");
+                }
+            }
         }
 
         u.separator();
@@ -426,7 +483,7 @@ fn frameInspector(a: *app.App) void {
         .max = @max(160, max_split),
     });
 
-    // Right: inspector form
+    // Right: inspector form (scrollable body for short windows)
     if (u.beginPanel(.{
         .id = "insp",
         .x = right_x,
@@ -434,6 +491,7 @@ fn frameInspector(a: *app.App) void {
         .w = right_w,
         .h = left_h,
         .title = "Inspector",
+        .scroll = true,
     })) {
         defer u.endPanel();
 

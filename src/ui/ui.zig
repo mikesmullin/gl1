@@ -111,7 +111,14 @@ pub const Ui = struct {
     ctx_open: bool = false,
     ctx_x: f32 = 0,
     ctx_y: f32 = 0,
+    /// Flat id (ignores pushId stack) so open/draw can span layout scopes.
     ctx_owner: Id = .{},
+    /// Skip outside-click dismiss on the frame the menu opened.
+    ctx_just_opened: bool = false,
+
+    /// Open menubar dropdown (flat id of the menu root, e.g. "file").
+    menu_open: Id = .{},
+    menu_anchor: Rect = .{},
 
     /// Command palette (Ctrl+K / Ctrl+P).
     palette_open: bool = false,
@@ -124,6 +131,10 @@ pub const Ui = struct {
     log_lens: [48]usize = @splat(0),
     log_count: usize = 0,
     log_head: usize = 0,
+
+    /// Nested beginPanel(scroll=true) markers for endPanel scissor pops.
+    panel_scroll_stack: [8]bool = @splat(false),
+    panel_scroll_depth: usize = 0,
 
     pub const ToastKind = enum { info, ok, warn, err };
     pub const Toast = struct {
@@ -162,6 +173,7 @@ pub const Ui = struct {
         self.layout_depth = 0;
         self.id_depth = 0;
         self.curr_count = 0;
+        self.panel_scroll_depth = 0;
         self.cmds.clear();
         self.tooltip_set = false;
         self.tooltip_len = 0;
@@ -170,6 +182,7 @@ pub const Ui = struct {
         if (!input.mouseDown(.left) and !self.drag.isNone()) {
             self.drag = .{};
         }
+        // ctx_just_opened cleared at end of frame after contextMenu runs.
 
         // Expire toasts.
         var ti: usize = 0;
@@ -302,6 +315,18 @@ pub const Ui = struct {
             h *%= prime;
         }
         return .{ .a = h, .b = @as(u64, @intCast(name.len)) << 32 | (if (self.id_depth > 0) self.id_stack[self.id_depth - 1] else 0) };
+    }
+
+    /// Id that ignores the pushId stack (menus/context that span scopes).
+    pub fn idFlat(self: *Ui, name: []const u8) Id {
+        _ = self;
+        var h: u64 = 0xcbf29ce484222325;
+        const prime: u64 = 0x100000001b3;
+        for (name) |c| {
+            h ^= c;
+            h *%= prime;
+        }
+        return .{ .a = h, .b = @as(u64, @intCast(name.len)) };
     }
 
     pub fn pushId(self: *Ui, name: []const u8) void {
@@ -543,6 +568,8 @@ pub const Ui = struct {
         w: f32 = 320,
         h: f32 = 200,
         title: ?[]const u8 = null,
+        /// When true, body scrolls with mouse wheel (state keyed by panel id).
+        scroll: bool = false,
     }) bool {
         const i = self.id(opts.id);
         const r = self.place(opts.x, opts.y, opts.w, opts.h);
@@ -550,18 +577,54 @@ pub const Ui = struct {
         self.drawRectBorder(r, self.theme.panel, self.theme.panel_border, 1);
 
         var content_y = r.y + self.theme.pad;
+        var title_h: f32 = 0;
         if (opts.title) |title| {
-            const th = self.theme.row_h;
-            self.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = th }, .{ 0.16, 0.17, 0.21, 1 });
+            title_h = self.theme.row_h;
+            self.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = title_h }, .{ 0.16, 0.17, 0.21, 1 });
             self.drawText(r.x + self.theme.pad, r.y + 6, self.theme.title_font_size, self.theme.text, title);
-            content_y = r.y + th + self.theme.pad;
+            content_y = r.y + title_h + self.theme.pad;
         }
+        const body = Rect{
+            .x = r.x,
+            .y = r.y + title_h,
+            .w = r.w,
+            .h = r.h - title_h,
+        };
+
+        var scroll_off: f32 = 0;
+        if (opts.scroll) {
+            const gop = self.scroll_y.getOrPut(i.a) catch null;
+            if (gop) |g| {
+                if (!g.found_existing) g.value_ptr.* = 0;
+                if (body.contains(self.input.mouse_x, self.input.mouse_y)) {
+                    g.value_ptr.* -= self.input.scroll_y * 28;
+                    if (g.value_ptr.* < 0) g.value_ptr.* = 0;
+                    // Soft max — content-driven clamp happens as user scrolls empty space.
+                    if (g.value_ptr.* > 4000) g.value_ptr.* = 4000;
+                }
+                scroll_off = g.value_ptr.*;
+            }
+            self.cmds.push(.{ .scissor_push = .{
+                .x = body.x + 1,
+                .y = body.y + 1,
+                .w = body.w - 2,
+                .h = body.h - 2,
+            } });
+        }
+
         self.pushId(opts.id);
+        // Stash whether this panel used scroll so endPanel can pop scissor.
+        // Encode in id stack unused — use a simple side channel via gap field abuse? 
+        // Instead: push a marker on a small stack.
+        if (self.panel_scroll_depth < self.panel_scroll_stack.len) {
+            self.panel_scroll_stack[self.panel_scroll_depth] = opts.scroll;
+            self.panel_scroll_depth += 1;
+        }
         self.beginVStack(.{
             .x = r.x,
-            .y = content_y - self.theme.pad,
+            .y = content_y - self.theme.pad - scroll_off,
             .w = r.w,
-            .h = r.h - (content_y - r.y),
+            .h = body.h + scroll_off,
             .pad = self.theme.pad,
             .gap = self.theme.gap,
         });
@@ -571,6 +634,12 @@ pub const Ui = struct {
     pub fn endPanel(self: *Ui) void {
         _ = self.endVStack();
         self.popId();
+        if (self.panel_scroll_depth > 0) {
+            self.panel_scroll_depth -= 1;
+            if (self.panel_scroll_stack[self.panel_scroll_depth]) {
+                self.cmds.push(.{ .scissor_pop = {} });
+            }
+        }
     }
 
     // --- Widgets ------------------------------------------------------------
@@ -808,23 +877,38 @@ pub const Ui = struct {
         }
 
         self.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
-        // Draw lines
-        const cx = box.x + 6;
-        var cy = box.y + 4;
+        // Draw lines; caret at end of buffer (insert point).
+        const origin_x = box.x + 6;
+        const origin_y = box.y + 4;
         const lh = self.font.lineHeight(size);
         const text = opts.buf[0..opts.len.*];
         var line_start: usize = 0;
         var li: usize = 0;
+        var line_i: usize = 0;
         while (li <= text.len) : (li += 1) {
             if (li == text.len or text[li] == '\n') {
                 const line = text[line_start..li];
-                self.drawText(cx, cy, size, self.theme.text, line);
-                cy += lh;
+                const ly = origin_y + @as(f32, @floatFromInt(line_i)) * lh;
+                self.drawText(origin_x, ly, size, self.theme.text, line);
+                line_i += 1;
                 line_start = li + 1;
             }
         }
+        // Caret after last line's content (or start of empty last line).
+        var nlines: usize = 0;
+        var last_nl: ?usize = null;
+        for (text, 0..) |ch, idx| {
+            if (ch == '\n') {
+                nlines += 1;
+                last_nl = idx;
+            }
+        }
+        const last_start = if (last_nl) |n| n + 1 else 0;
+        const last_line = text[last_start..];
+        const caret_x = origin_x + self.font.measure(last_line, size).w;
+        const caret_y = origin_y + @as(f32, @floatFromInt(nlines)) * lh;
         if (focused and @mod(@as(i64, @intFromFloat(self.time * 2)), 2) == 0) {
-            self.drawRect(.{ .x = cx, .y = cy - lh, .w = 2, .h = lh }, self.theme.text);
+            self.drawRect(.{ .x = caret_x, .y = caret_y, .w = 2, .h = lh }, self.theme.text);
         }
         self.cmds.push(.{ .scissor_pop = {} });
         return changed;
@@ -1255,7 +1339,72 @@ pub const Ui = struct {
         self.popId();
     }
 
-    /// Menu item inside menubar (or any hstack).
+    /// Top-level menubar button that toggles a dropdown. `items` drawn while open.
+    /// Returns index of chosen item, or null.
+    pub fn menuDropdown(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        items: []const []const u8,
+    }) ?usize {
+        const m = self.font.measure(opts.label, self.theme.font_size);
+        const r = self.alloc(m.w + 20, self.theme.menubar_h - 6);
+        const i = self.idFlat(opts.id);
+        const st = self.interact(i, r, false);
+        const open = self.menu_open.eq(i);
+        if (st.hot or open) self.drawRect(r, self.theme.button_hot);
+        self.drawText(r.x + 10, r.y + 4, self.theme.font_size, self.theme.text, opts.label);
+
+        if (st.clicked) {
+            if (open) {
+                self.menu_open = .{};
+            } else {
+                self.menu_open = i;
+                self.menu_anchor = r;
+                self.closeContextMenu();
+            }
+        }
+
+        if (!self.menu_open.eq(i)) return null;
+
+        // Dropdown panel under the label.
+        const item_h = self.theme.row_h - 2;
+        const pad: f32 = 4;
+        var max_w: f32 = r.w;
+        for (opts.items) |it| {
+            max_w = @max(max_w, self.font.measure(it, self.theme.font_size).w + 24);
+        }
+        const menu_h = item_h * @as(f32, @floatFromInt(opts.items.len)) + pad * 2;
+        const menu = Rect{ .x = r.x, .y = r.y + r.h + 2, .w = max_w, .h = menu_h };
+        self.drawRectBorder(menu, self.theme.modal, self.theme.panel_border, 1);
+
+        var chosen: ?usize = null;
+        for (opts.items, 0..) |item, idx| {
+            const ir = Rect{
+                .x = menu.x + pad,
+                .y = menu.y + pad + @as(f32, @floatFromInt(idx)) * item_h,
+                .w = max_w - pad * 2,
+                .h = item_h,
+            };
+            var idbuf: [64]u8 = undefined;
+            const iname = std.fmt.bufPrint(&idbuf, "menu:{s}:{d}", .{ opts.id, idx }) catch item;
+            const iid = self.idFlat(iname);
+            const ist = self.interact(iid, ir, false);
+            if (ist.hot) self.drawRect(ir, self.theme.button_hot);
+            self.drawText(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
+            if (ist.clicked) chosen = idx;
+        }
+
+        // Click outside closes (not on the menu button itself this frame if just toggled).
+        if (self.input.mousePressed(.left)) {
+            const on_btn = r.contains(self.input.mouse_x, self.input.mouse_y);
+            const on_menu = menu.contains(self.input.mouse_x, self.input.mouse_y);
+            if (!on_btn and !on_menu) self.menu_open = .{};
+        }
+        if (chosen != null) self.menu_open = .{};
+        return chosen;
+    }
+
+    /// Simple menubar action button (no dropdown) — kept for Help-style actions.
     pub fn menuItem(self: *Ui, opts: struct { id: []const u8, label: []const u8 }) bool {
         const m = self.font.measure(opts.label, self.theme.font_size);
         const r = self.alloc(m.w + 20, self.theme.menubar_h - 6);
@@ -1430,16 +1579,20 @@ pub const Ui = struct {
     }
 
     /// Open a context menu at the cursor (typically on right-click).
+    /// `owner` is matched with idFlat (ignores layout id stack).
     pub fn openContextMenu(self: *Ui, owner: []const u8) void {
         self.ctx_open = true;
         self.ctx_x = self.input.mouse_x;
         self.ctx_y = self.input.mouse_y;
-        self.ctx_owner = self.id(owner);
+        self.ctx_owner = self.idFlat(owner);
+        self.ctx_just_opened = true;
+        self.menu_open = .{}; // close any menubar dropdown
     }
 
     pub fn closeContextMenu(self: *Ui) void {
         self.ctx_open = false;
         self.ctx_owner = .{};
+        self.ctx_just_opened = false;
     }
 
     /// Draw/context-handle an open context menu. Returns clicked item index, or null.
@@ -1448,7 +1601,7 @@ pub const Ui = struct {
         items: []const []const u8,
     }) ?usize {
         if (!self.ctx_open) return null;
-        if (!self.ctx_owner.eq(self.id(opts.owner))) return null;
+        if (!self.ctx_owner.eq(self.idFlat(opts.owner))) return null;
 
         if (self.input.keyPressed(.escape)) {
             self.closeContextMenu();
@@ -1472,8 +1625,6 @@ pub const Ui = struct {
         self.drawRectBorder(menu, self.theme.modal, self.theme.panel_border, 1);
 
         var clicked: ?usize = null;
-        self.pushId(opts.owner);
-        defer self.popId();
         for (opts.items, 0..) |item, idx| {
             const ir = Rect{
                 .x = menu.x + pad,
@@ -1481,19 +1632,26 @@ pub const Ui = struct {
                 .w = max_w - pad * 2,
                 .h = item_h,
             };
-            const iid = self.id(item);
+            // Flat ids so they don't collide with layout stack.
+            var idbuf: [64]u8 = undefined;
+            const iname = std.fmt.bufPrint(&idbuf, "ctx:{s}:{d}", .{ opts.owner, idx }) catch item;
+            const iid = self.idFlat(iname);
             const st = self.interact(iid, ir, false);
             if (st.hot) self.drawRect(ir, self.theme.button_hot);
             self.drawText(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
             if (st.clicked) clicked = idx;
         }
 
-        // Click outside closes.
-        if (self.input.mousePressed(.left) or self.input.mousePressed(.right)) {
-            if (!menu.contains(self.input.mouse_x, self.input.mouse_y)) {
-                self.closeContextMenu();
+        // Click outside closes — but not on the opening right-click frame.
+        if (!self.ctx_just_opened) {
+            if (self.input.mousePressed(.left) or self.input.mousePressed(.right)) {
+                if (!menu.contains(self.input.mouse_x, self.input.mouse_y)) {
+                    self.closeContextMenu();
+                    return null;
+                }
             }
         }
+        self.ctx_just_opened = false;
         if (clicked != null) self.closeContextMenu();
         return clicked;
     }

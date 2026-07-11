@@ -100,18 +100,27 @@ fn loadFont() void {
 }
 
 fn trySceneHotkeys() void {
-    // Ctrl+digit only so Shift+1 (`!`) and bare digits remain free for typing.
+    // Called once per frame (not per-event) so keyPressed edges stay coherent.
+    // Ctrl+digit / Ctrl+K only — bare digits and Shift+digit stay free for typing.
     if (!g.input.ctrl) return;
-    // Ctrl+K / Ctrl+P → command palette (handled in scenes via ui flag).
+
+    // Ctrl+K / Ctrl+P → command palette (works from any scene).
     if (g.input.keyPressed(.k) or g.input.keyPressed(.p)) {
         g.ui.palette_open = !g.ui.palette_open;
         if (g.ui.palette_open) {
             g.ui.palette_query_len = 0;
             g.ui.palette_sel = 0;
-            g.ui.focus = .{}; // don't type into other fields
+            g.ui.focus = .{};
+            g.ui.menu_open = .{};
+            g.ui.closeContextMenu();
+            g.ui.log("palette opened");
+        } else {
+            g.ui.log("palette closed");
         }
         return;
     }
+    if (g.ui.palette_open) return; // don't also switch scenes while filtering
+
     if (g.input.keyPressed(.one)) g.scene = .triangle;
     if (g.input.keyPressed(.two)) g.scene = .rects;
     if (g.input.keyPressed(.three)) g.scene = .text;
@@ -129,8 +138,6 @@ export fn event(ev: [*c]const sapp.Event) void {
     if (ev.*.type == .CLIPBOARD_PASTED) {
         g.input.pushPaste(sapp.getClipboardString());
     }
-    trySceneHotkeys();
-    // Esc handled after frame so modals can consume it first.
 }
 
 export fn frame() void {
@@ -161,6 +168,7 @@ export fn frame() void {
     if (g.pip_alpha.id != 0) sgl.loadPipeline(g.pip_alpha);
 
     g.ui.beginFrame(&g.input, &g.font, g.width, g.height, g.dt, g.time); // input is mutable for paste consume
+    trySceneHotkeys(); // after events for this frame have been delivered
     scenes.frame(&g);
     g.ui.endFrame();
     // Phase 8: UI builds a command list; Sokol/GL backend executes it.
