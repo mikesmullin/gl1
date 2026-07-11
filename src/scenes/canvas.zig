@@ -267,14 +267,6 @@ fn clearSelection(st: *state.State) void {
     st.canvas_sel_primary = -1;
 }
 
-fn orbitPivot(st: *const state.State) Vec3 {
-    if (st.canvas_sel_primary >= 0 and st.canvas_sel_primary < ents.len) {
-        return ents[@intCast(st.canvas_sel_primary)].pos;
-    }
-    // No selection: keep current look target (screen-center focus).
-    return .{ .x = st.canvas_tx, .y = st.canvas_ty, .z = st.canvas_tz };
-}
-
 const Cam = struct {
     eye: Vec3,
     target: Vec3,
