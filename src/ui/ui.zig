@@ -856,6 +856,18 @@ pub const Ui = struct {
                 }
             }
         }
+        // Always present matches alphabetically (by label), independent of source order.
+        var a_i: usize = 1;
+        while (a_i < mct) : (a_i += 1) {
+            const key = matches[a_i];
+            const key_s = opts.items[key];
+            var a_j = a_i;
+            while (a_j > 0 and paletteLabelLess(key_s, opts.items[matches[a_j - 1]])) {
+                matches[a_j] = matches[a_j - 1];
+                a_j -= 1;
+            }
+            matches[a_j] = key;
+        }
 
         // Layout: fixed chrome + fixed list viewport (always max_vis rows tall when
         // there are matches) so the box does not grow/shrink with partial last page
@@ -992,6 +1004,19 @@ pub const Ui = struct {
         return result;
     }
 
+    /// Case-insensitive lexicographic compare for palette ordering (`a` before `b`).
+    fn paletteLabelLess(a: []const u8, b: []const u8) bool {
+        const n = @min(a.len, b.len);
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const ca: u8 = if (a[i] >= 'A' and a[i] <= 'Z') a[i] + 32 else a[i];
+            const cb: u8 = if (b[i] >= 'A' and b[i] <= 'Z') b[i] + 32 else b[i];
+            if (ca < cb) return true;
+            if (ca > cb) return false;
+        }
+        return a.len < b.len;
+    }
+
     fn containsIgnoreCaseUi(hay: []const u8, needle: []const u8) bool {
         if (needle.len == 0) return true;
         if (needle.len > hay.len) return false;
@@ -1000,9 +1025,9 @@ pub const Ui = struct {
             var ok = true;
             for (needle, 0..) |nc, j| {
                 const hc = hay[i + j];
-                const a: u8 = if (nc >= 'A' and nc <= 'Z') nc + 32 else nc;
-                const b: u8 = if (hc >= 'A' and hc <= 'Z') hc + 32 else hc;
-                if (a != b) {
+                const ca: u8 = if (nc >= 'A' and nc <= 'Z') nc + 32 else nc;
+                const cb: u8 = if (hc >= 'A' and hc <= 'Z') hc + 32 else hc;
+                if (ca != cb) {
                     ok = false;
                     break;
                 }
