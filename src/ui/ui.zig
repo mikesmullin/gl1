@@ -92,10 +92,12 @@ pub const Ui = struct {
     /// Wheel already claimed this frame (stop bubbling to lower widgets/scene).
     scroll_eaten: bool = false,
 
-    /// Active drag (splitter, etc.).
+    /// Active drag (splitter, Blender-style slider, etc.).
     drag: Id = .{},
     drag_anchor: f32 = 0,
     drag_value0: f32 = 0,
+    /// True while a widget has hidden/locked the mouse for relative drag.
+    mouse_captured_for_drag: bool = false,
 
     /// Context menu (right-click).
     ctx_open: bool = false,
@@ -182,9 +184,15 @@ pub const Ui = struct {
         self.tooltip_len = 0;
         self.consumed_escape = false;
         self.scroll_eaten = false;
-        // Clear drag when mouse released.
+        // Clear drag when mouse released; restore cursor if a slider captured it.
         if (!input.mouseDown(.left) and !self.drag.isNone()) {
             self.drag = .{};
+            if (self.mouse_captured_for_drag) {
+                self.mouse_captured_for_drag = false;
+                const sapp = @import("sokol").app;
+                sapp.lockMouse(false);
+                sapp.showMouse(true);
+            }
         }
         // ctx_just_opened cleared at end of frame after contextMenu runs.
 
