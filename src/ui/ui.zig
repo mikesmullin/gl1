@@ -835,9 +835,16 @@ pub const Ui = struct {
 
         if (self.palette_sel >= mct) self.palette_sel = mct - 1;
 
-        // Keyboard: move selection (scroll follows below).
-        if (self.input.keyPressed(.down)) self.palette_sel = @min(self.palette_sel + 1, mct - 1);
-        if (self.input.keyPressed(.up) and self.palette_sel > 0) self.palette_sel -= 1;
+        // Keyboard: move selection; scroll only follows when keys move sel.
+        var keyboard_nav = false;
+        if (self.input.keyPressed(.down)) {
+            self.palette_sel = @min(self.palette_sel + 1, mct - 1);
+            keyboard_nav = true;
+        }
+        if (self.input.keyPressed(.up) and self.palette_sel > 0) {
+            self.palette_sel -= 1;
+            keyboard_nav = true;
+        }
 
         const max_scroll = if (mct > max_vis) mct - max_vis else 0;
         const ph = chrome_h + list_viewport_h + bottom_pad;
@@ -846,34 +853,33 @@ pub const Ui = struct {
         const list_y = qbox.y + row_h + gap;
         const list_r = Rect{ .x = box.x + pad, .y = list_y, .w = pw - pad * 2, .h = list_viewport_h };
 
-        // Wheel over the palette: move selection (same as arrows). Previously we
-        // only moved palette_scroll while palette_sel stayed at 0, then the
-        // "keep sel visible" clamp snapped scroll back every frame → jitter.
-        // Accept wheel anywhere on the palette chrome, not only the list.
+        // Wheel: scroll the list only — does not change selection. Scrollbar moves
+        // immediately. Hover (below) selects the row under the cursor instead.
         if (box.contains(self.input.mouse_x, self.input.mouse_y) and self.input.scroll_y != 0) {
-            // scroll_y > 0 typically means wheel up → earlier items.
             const steps_f = @abs(self.input.scroll_y);
             var steps: usize = @intFromFloat(@floor(steps_f));
             if (steps == 0) steps = 1;
             var s: usize = 0;
             while (s < steps) : (s += 1) {
                 if (self.input.scroll_y > 0) {
-                    if (self.palette_sel > 0) self.palette_sel -= 1;
+                    if (self.palette_scroll > 0) self.palette_scroll -= 1;
                 } else {
-                    if (self.palette_sel + 1 < mct) self.palette_sel += 1;
+                    if (self.palette_scroll < max_scroll) self.palette_scroll += 1;
                 }
             }
-            // Consume so panels under the overlay do not also scroll.
             self.input.scroll_y = 0;
         } else if (self.input.scroll_y != 0) {
-            // Overlay is open: don't scroll the scene underneath either.
+            // Overlay open: don't scroll the scene underneath.
             self.input.scroll_y = 0;
         }
 
-        // Keep selection in the viewport (keyboard + wheel).
-        if (self.palette_sel < self.palette_scroll) self.palette_scroll = self.palette_sel;
-        if (self.palette_sel >= self.palette_scroll + max_vis)
-            self.palette_scroll = self.palette_sel + 1 - max_vis;
+        // Only keyboard nav forces the selection into the viewport (so arrowing
+        // below the fold still works). Wheel leaves selection alone.
+        if (keyboard_nav) {
+            if (self.palette_sel < self.palette_scroll) self.palette_scroll = self.palette_sel;
+            if (self.palette_sel >= self.palette_scroll + max_vis)
+                self.palette_scroll = self.palette_sel + 1 - max_vis;
+        }
         if (self.palette_scroll > max_scroll) self.palette_scroll = max_scroll;
 
         const vis = @min(mct - self.palette_scroll, max_vis);
@@ -886,7 +892,7 @@ pub const Ui = struct {
         else
             self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
 
-        // Clip list rows to the viewport (fixes ~10px bottom overflow).
+        // Clip list rows to the viewport.
         self.front.push(.{ .scissor_push = .{
             .x = list_r.x,
             .y = list_r.y,
@@ -905,6 +911,10 @@ pub const Ui = struct {
                 .w = list_r.w - 8, // leave room for scrollbar
                 .h = row_h,
             };
+            // Hover selects (more intuitive than wheel-select).
+            if (ir.contains(self.input.mouse_x, self.input.mouse_y)) {
+                self.palette_sel = match_i;
+            }
             const on = match_i == self.palette_sel;
             if (on) self.drawRectFront(ir, self.theme.selected);
             self.drawTextFront(ir.x + 8, ir.y + 6, self.theme.font_size, if (on) self.theme.accent else self.theme.text, opts.items[item_idx]);
@@ -915,7 +925,8 @@ pub const Ui = struct {
         if (max_scroll > 0) {
             const track = Rect{ .x = box.x + pw - pad - 4, .y = list_y, .w = 4, .h = list_viewport_h };
             self.drawRectFront(track, self.theme.slider_track);
-            const thumb_h = @max(12, list_viewport_h * @as(f32, @floatFromInt(vis)) / @as(f32, @floatFromInt(mct)));
+            // Thumb size reflects viewport vs total list; position tracks scroll.
+            const thumb_h = @max(12, list_viewport_h * @as(f32, @floatFromInt(max_vis)) / @as(f32, @floatFromInt(mct)));
             const thumb_t = list_y + (list_viewport_h - thumb_h) * (@as(f32, @floatFromInt(self.palette_scroll)) / @as(f32, @floatFromInt(max_scroll)));
             self.drawRectFront(.{ .x = track.x, .y = thumb_t, .w = 4, .h = thumb_h }, self.theme.accent);
         }
