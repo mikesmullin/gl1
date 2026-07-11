@@ -1283,19 +1283,6 @@ pub const Ui = struct {
         return components.colorSwatch.colorSwatch(self, opts);
     }
 
-    /// Number spinner (float) with − / + buttons.
-    pub fn spinner(self: *Ui, opts: struct {
-        id: []const u8,
-        label: []const u8,
-        value: *f32,
-        min: f32 = 0,
-        max: f32 = 100,
-        step: f32 = 1,
-        w: f32 = 160,
-    }) bool {
-        return components.spinner.spinner(self, opts);
-    }
-
     /// Horizontal form row: fixed-width label column + remaining content width.
     /// Opens a nested hstack; call `endFormRow` after the control.
     pub fn beginFormRow(self: *Ui, opts: struct { label: []const u8, label_w: f32 = 90 }) void {

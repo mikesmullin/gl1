@@ -213,7 +213,7 @@ pub fn frame(a: *app.App) void {
         });
         _ = u.slider(.{ .id = "hp", .label = "HP", .value = &st.entity_hp, .min = 0, .max = 100, .w = @min(320, right_w - 40) });
         _ = u.toggle(.{ .id = "vis", .label = "Visible", .value = &st.entity_visible });
-        _ = u.spinner(.{ .id = "layer", .label = "Layer", .value = &st.spinner_val, .min = 0, .max = 32, .step = 1, .w = 200 });
+        _ = u.slider(.{ .id = "layer", .label = "Layer", .value = &st.spinner_val, .min = 0, .max = 32, .w = @min(320, right_w - 40) });
 
         u.separator();
         if (u.beginCollapsible(.{ .id = "col_xf", .title = "Transform", .open = &st.collab_a })) {

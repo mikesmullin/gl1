@@ -15,7 +15,6 @@ pub fn frame(a: *app.App) void {
         "Radio",
         "Toggle",
         "Slider",
-        "Spinner",
         "TextInput",
         "Dropdown",
         "Tabs",
@@ -111,20 +110,17 @@ pub fn frame(a: *app.App) void {
                 _ = u.toggle(.{ .id = "tog", .label = "Notifications", .value = &st.toggled });
             },
             5 => {
-                u.label(.{ .text = "Slider" });
+                u.label(.{ .text = "Blender-style number slider" });
                 _ = u.slider(.{ .id = "sb_sp", .label = "Speed", .value = &st.speed });
                 _ = u.slider(.{ .id = "sb_vo", .label = "Volume", .value = &st.volume, .min = 0, .max = 2 });
+                _ = u.slider(.{ .id = "sb_layer", .label = "Layer", .value = &st.spinner_val, .min = 0, .max = 32, .w = 280 });
             },
             6 => {
-                u.label(.{ .text = "Spinner (− / +)" });
-                _ = u.spinner(.{ .id = "sb_spin", .label = "Value", .value = &st.spinner_val, .min = 0, .max = 100, .step = 0.5 });
-            },
-            7 => {
                 u.label(.{ .text = "Text input (Ctrl+digit = scenes; ! types fine)" });
                 _ = u.textInput(.{ .id = "sb_ti", .label = "Value", .buf = &st.text_buf, .len = &st.text_len, .w = 280 });
                 u.label(.{ .text = st.text_buf[0..st.text_len], .color = u.theme.accent });
             },
-            8 => {
+            7 => {
                 u.label(.{ .text = "Dropdown / select" });
                 const dd_items = [_][]const u8{ "Apple", "Banana", "Cherry", "Date" };
                 _ = u.dropdown(.{
@@ -136,7 +132,7 @@ pub fn frame(a: *app.App) void {
                     .w = 220,
                 });
             },
-            9 => {
+            8 => {
                 u.label(.{ .text = "Tabs" });
                 const tab_items = [_][]const u8{ "General", "Graphics", "Audio" };
                 _ = u.tabs(.{ .id = "tabs", .items = &tab_items, .selected = &st.tab_sel });
@@ -147,12 +143,12 @@ pub fn frame(a: *app.App) void {
                     else => u.label(.{ .text = "Audio settings placeholder" }),
                 }
             },
-            10 => {
+            9 => {
                 u.label(.{ .text = "List box" });
                 const li = [_][]const u8{ "Alpha", "Bravo", "Charlie", "Delta", "Echo" };
                 _ = u.listBox(.{ .id = "lb", .items = &li, .selected = &st.list_sel, .w = 220, .h = 140 });
             },
-            11 => {
+            10 => {
                 u.label(.{ .text = "Scroll area (wheel + scissor)" });
                 _ = u.beginScroll(.{ .id = "sb_scroll", .x = dx + 24, .y = 100, .w = dw - 48, .h = 220 });
                 var li: u32 = 0;
@@ -163,7 +159,7 @@ pub fn frame(a: *app.App) void {
                 }
                 u.endScroll();
             },
-            12 => {
+            11 => {
                 u.label(.{ .text = "Collapsible sections" });
                 if (u.beginCollapsible(.{ .id = "c1", .title = "Section A", .open = &st.collab_a })) {
                     defer u.endCollapsible(true);
@@ -176,27 +172,27 @@ pub fn frame(a: *app.App) void {
                     _ = u.slider(.{ .id = "c2s", .label = "Nested", .value = &st.speed });
                 } else u.endCollapsible(false);
             },
-            13 => {
+            12 => {
                 u.label(.{ .text = "Modal dialog (Esc closes modal, not app)" });
                 if (u.button(.{ .id = "open_m", .label = "Open modal" })) st.modal_open = true;
             },
-            14 => {
+            13 => {
                 u.label(.{ .text = "Toast notifications" });
                 if (u.button(.{ .id = "t_ok", .label = "OK toast" })) u.toast("All good", .ok, 2);
                 if (u.button(.{ .id = "t_info", .label = "Info toast" })) u.toast("FYI message", .info, 2);
                 if (u.button(.{ .id = "t_warn", .label = "Warn toast" })) u.toast("Watch out", .warn, 2);
                 if (u.button(.{ .id = "t_err", .label = "Error toast" })) u.toast("Something failed", .err, 2);
             },
-            15 => {
+            14 => {
                 u.label(.{ .text = "Menubar lives in the Inspector scene." });
                 if (u.button(.{ .id = "go_i2", .label = "Open inspector" })) a.scene = .inspector;
             },
-            16 => {
+            15 => {
                 u.label(.{ .text = "Vertical splitter — drag the gap between panes" });
                 u.label(.{ .text = "See Inspector (Ctrl+P → scene). Split width is persisted.", .color = u.theme.text_dim });
                 if (u.button(.{ .id = "go_split", .label = "Open inspector" })) a.scene = .inspector;
             },
-            17 => {
+            16 => {
                 u.label(.{ .text = "Context menu — right-click the entity list in Inspector" });
                 if (u.button(.{ .id = "ctx_demo", .label = "Open sample menu here" })) {
                     u.openContextMenu("sb_ctx");
@@ -206,7 +202,7 @@ pub fn frame(a: *app.App) void {
                     u.toast(std.fmt.bufPrint(&b, "chose {d}", .{c}) catch "chose", .info, 1.5);
                 }
             },
-            18 => {
+            17 => {
                 u.label(.{ .text = "Tree nodes — expand / select" });
                 _ = u.treeNode(.{ .id = "sb_root", .label = "Root", .open = &st.world_open, .depth = 0 });
                 if (st.world_open) {
@@ -217,22 +213,22 @@ pub fn frame(a: *app.App) void {
                     }
                 }
             },
-            19 => {
+            18 => {
                 u.label(.{ .text = "Progress" });
                 st.progress = @mod(st.progress + a.dt * 0.15, 1.0);
                 u.progress(.{ .label = "Indeterminate loop", .value = st.progress, .w = 300 });
             },
-            20 => {
+            19 => {
                 u.label(.{ .text = "Panel chrome — title bar + body." });
                 u.label(.{ .text = "Use beginPanel / defer endPanel.", .color = u.theme.text_dim });
             },
-            21 => {
+            20 => {
                 u.label(.{ .text = "Layout: vstack + hstack + padding/gap" });
                 if (u.button(.{ .id = "sb_h1", .label = "A", .w = 60 })) {}
                 if (u.button(.{ .id = "sb_h2", .label = "B", .w = 60 })) {}
                 if (u.button(.{ .id = "sb_h3", .label = "C", .w = 60 })) {}
             },
-            22 => {
+            21 => {
                 u.label(.{ .text = "Theme tokens" });
                 _ = u.toggle(.{ .id = "theme_cool", .label = "Cool dark variant", .value = &st.theme_cool });
                 u.separator();
@@ -245,7 +241,7 @@ pub fn frame(a: *app.App) void {
                 }
                 u.label(.{ .text = "bg panel accent button danger warn info fill", .color = u.theme.text_dim });
             },
-            23 => {
+            22 => {
                 u.label(.{ .text = "Full composite demo: inspector scene" });
                 if (u.button(.{ .id = "go_i3", .label = "Go to inspector" })) a.scene = .inspector;
             },

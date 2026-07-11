@@ -25,7 +25,7 @@ pub fn frame(a: *app.App) void {
         _ = u.checkbox(.{ .id = "chk", .label = "Enable feature", .value = &st.checked });
         _ = u.toggle(.{ .id = "togw", .label = "Turbo", .value = &st.toggled });
         _ = u.slider(.{ .id = "speed", .label = "Speed", .value = &st.speed, .min = 0, .max = 1 });
-        _ = u.spinner(.{ .id = "spin", .label = "Count", .value = &st.spinner_val, .min = 0, .max = 100, .step = 1 });
+        _ = u.slider(.{ .id = "count", .label = "Count", .value = &st.spinner_val, .min = 0, .max = 100 });
         _ = u.textInput(.{ .id = "name", .label = "Name", .buf = &st.text_buf, .len = &st.text_len });
         u.progress(.{ .label = "Load", .value = st.progress });
         st.progress = @mod(st.progress + a.dt * 0.1, 1.0);
