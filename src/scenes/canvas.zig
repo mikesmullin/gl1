@@ -70,30 +70,39 @@ const Cam = struct {
     fov_y: f32,
 };
 
+/// Turntable orbit (Blender-style): yaw around world Y, pitch about horizontal.
+/// Basis always uses **world up** so the view never rolls inverted at the poles
+/// (that made +Y appear stuck pointing down and orbit feel like only ~180°).
 fn buildCam(st: *const state.State) Cam {
     const yaw = st.canvas_yaw;
     const pitch = st.canvas_pitch;
+    const dist = st.canvas_dist;
     const cp = @cos(pitch);
     const sp = @sin(pitch);
     const cy = @cos(yaw);
     const sy = @sin(yaw);
-    // Look direction: yaw=0 pitch=0 → −Z (front); pitch=−π/2 → −Y (top).
-    const forward = Vec3.norm(.{
-        .x = cp * sy,
-        .y = sp,
-        .z = -cp * cy,
-    });
+
+    const target: Vec3 = .{ .x = st.canvas_tx, .y = st.canvas_ty, .z = st.canvas_tz };
+
+    // Eye on a sphere around the target.
+    // pitch = 0, yaw = 0 → on +Z (front); pitch = −π/2 → on +Y (top).
+    const to_eye = Vec3{
+        .x = dist * cp * sy,
+        .y = dist * (-sp),
+        .z = dist * cp * cy,
+    };
+    const eye = Vec3.add(target, to_eye);
+
+    const forward = Vec3.norm(Vec3.sub(target, eye));
     const world_up: Vec3 = .{ .x = 0, .y = 1, .z = 0 };
     var right = Vec3.cross(forward, world_up);
-    if (Vec3.length(right) < 1e-3) {
-        // Looking straight up/down — rebuild right from yaw.
-        right = .{ .x = cy, .y = 0, .z = sy };
+    if (Vec3.length(right) < 1e-4) {
+        // Nearly top/bottom — horizontal right from yaw.
+        right = .{ .x = cy, .y = 0, .z = -sy };
     }
     right = Vec3.norm(right);
     const up = Vec3.norm(Vec3.cross(right, forward));
-    const target: Vec3 = .{ .x = st.canvas_tx, .y = st.canvas_ty, .z = st.canvas_tz };
-    // eye sits behind the look direction so we gaze toward the target.
-    const eye = Vec3.sub(target, Vec3.scale(forward, st.canvas_dist));
+
     return .{
         .eye = eye,
         .target = target,
