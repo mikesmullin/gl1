@@ -39,6 +39,7 @@ pub const State = struct {
     selected: usize = 0,
     // widgets demos
     checked: bool = true,
+    toggled: bool = false,
     radio_group: u32 = 0,
     speed: f32 = 0.45,
     volume: f32 = 0.7,
@@ -47,6 +48,9 @@ pub const State = struct {
     text_len: usize = 0,
     progress: f32 = 0.35,
     spin: f32 = 0,
+    dropdown_sel: usize = 0,
+    dropdown_open: bool = false,
+    tab_sel: usize = 0,
 
     pub fn init(self: *State) void {
         const hello = "hello gl1";
@@ -188,8 +192,12 @@ fn frameStorybook(a: *app.App) void {
         "Button",
         "Checkbox",
         "Radio",
+        "Toggle",
         "Slider",
         "TextInput",
+        "Dropdown",
+        "Tabs",
+        "Scroll",
         "Progress",
         "Panel",
         "Layout",
@@ -259,25 +267,65 @@ fn frameStorybook(a: *app.App) void {
                 u.label(.{ .text = std.fmt.bufPrint(&rbuf, "selected={d}", .{st.radio_group}) catch "", .color = u.theme.text_dim });
             },
             4 => {
+                u.label(.{ .text = "Toggle switch" });
+                _ = u.toggle(.{ .id = "tog", .label = "Notifications", .value = &st.toggled });
+                u.label(.{ .text = if (st.toggled) "on" else "off", .color = u.theme.text_dim });
+            },
+            5 => {
                 u.label(.{ .text = "Slider" });
                 _ = u.slider(.{ .id = "sb_sp", .label = "Speed", .value = &st.speed });
                 _ = u.slider(.{ .id = "sb_vo", .label = "Volume", .value = &st.volume, .min = 0, .max = 2 });
             },
-            5 => {
+            6 => {
                 u.label(.{ .text = "Text input (focus + type; Ctrl+digit = scenes)" });
                 _ = u.textInput(.{ .id = "sb_ti", .label = "Value", .buf = &st.text_buf, .len = &st.text_len, .w = 280 });
                 u.label(.{ .text = st.text_buf[0..st.text_len], .color = u.theme.accent });
             },
-            6 => {
+            7 => {
+                u.label(.{ .text = "Dropdown / select" });
+                const dd_items = [_][]const u8{ "Apple", "Banana", "Cherry", "Date" };
+                _ = u.dropdown(.{
+                    .id = "dd",
+                    .label = "Fruit",
+                    .items = &dd_items,
+                    .selected = &st.dropdown_sel,
+                    .open = &st.dropdown_open,
+                    .w = 220,
+                });
+            },
+            8 => {
+                u.label(.{ .text = "Tabs" });
+                const tab_items = [_][]const u8{ "General", "Graphics", "Audio" };
+                _ = u.tabs(.{ .id = "tabs", .items = &tab_items, .selected = &st.tab_sel });
+                u.separator();
+                switch (st.tab_sel) {
+                    0 => u.label(.{ .text = "General settings placeholder" }),
+                    1 => u.label(.{ .text = "Graphics settings placeholder" }),
+                    else => u.label(.{ .text = "Audio settings placeholder" }),
+                }
+            },
+            9 => {
+                u.label(.{ .text = "Scroll area (wheel when hovered; scissor clip)" });
+                // Nested absolute scroll demo inside the detail panel area.
+                _ = u.beginScroll(.{ .id = "sb_scroll", .x = dx + 24, .y = 100, .w = dw - 48, .h = 220 });
+                var li: u32 = 0;
+                while (li < 24) : (li += 1) {
+                    var lbuf: [40]u8 = undefined;
+                    const line = std.fmt.bufPrint(&lbuf, "scroll line {d}", .{li}) catch "";
+                    u.label(.{ .text = line });
+                }
+                u.endScroll();
+            },
+            10 => {
                 u.label(.{ .text = "Progress" });
                 st.progress = @mod(st.progress + a.dt * 0.15, 1.0);
                 u.progress(.{ .label = "Indeterminate loop", .value = st.progress, .w = 300 });
             },
-            7 => {
+            11 => {
                 u.label(.{ .text = "Panel is this chrome — title bar + body." });
                 u.label(.{ .text = "Use beginPanel / defer endPanel.", .color = u.theme.text_dim });
             },
-            8 => {
+            12 => {
                 u.label(.{ .text = "Layout: vstack + hstack + padding/gap" });
                 u.beginHStack(.{ .x = dx + 24, .y = 120, .w = dw - 48, .h = 40, .pad = 0, .gap = 8 });
                 _ = u.button(.{ .id = "sb_h1", .label = "A", .w = 60 });
@@ -285,7 +333,7 @@ fn frameStorybook(a: *app.App) void {
                 _ = u.button(.{ .id = "sb_h3", .label = "C", .w = 60 });
                 _ = u.endHStack();
             },
-            9 => {
+            13 => {
                 u.label(.{ .text = "Theme tokens (dark)" });
                 const sw = 28.0;
                 const colors = [_]ui.Color{ u.theme.bg, u.theme.panel, u.theme.accent, u.theme.button, u.theme.danger, u.theme.slider_fill };

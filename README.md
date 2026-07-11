@@ -38,7 +38,7 @@ zig build
 | **Ctrl+0…6** | Switch scene |
 | **Esc** | Quit |
 
-Digits and Shift+digit (e.g. `!`) are free for typing into text fields.
+Digits and Shift+digit (e.g. `!`) are free for typing. Scene shortcuts require **Ctrl**.
 
 ## Project layout
 

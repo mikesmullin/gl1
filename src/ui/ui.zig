@@ -586,7 +586,7 @@ pub const Ui = struct {
         self.drawRect(.{ .x = r.x, .y = r.y + 3, .w = self.top().width - 2 * self.top().pad, .h = 1 }, self.theme.panel_border);
     }
 
-    /// Simple scrollable region: records scroll via mouse wheel when hovered.
+    /// Scrollable region with GPU scissor clip + wheel scroll when hovered.
     pub fn beginScroll(self: *Ui, opts: struct { id: []const u8, x: f32, y: f32, w: f32, h: f32 }) f32 {
         const i = self.id(opts.id);
         const r = self.place(opts.x, opts.y, opts.w, opts.h);
@@ -599,14 +599,147 @@ pub const Ui = struct {
             if (gop.value_ptr.* < 0) gop.value_ptr.* = 0;
         }
         const scroll = gop.value_ptr.*;
+        // Clip subsequent draw commands to the scroll viewport (inset for border).
+        const clip = Rect{ .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 };
+        self.cmds.push(.{ .scissor_push = .{ .x = clip.x, .y = clip.y, .w = clip.w, .h = clip.h } });
         self.pushId(opts.id);
-        self.beginVStack(.{ .x = r.x, .y = r.y - scroll, .w = r.w, .h = r.h + scroll, .pad = self.theme.pad, .gap = self.theme.gap });
-        // Note: no GPU scissor yet — content may draw outside; fine for v1.
+        self.beginVStack(.{
+            .x = r.x,
+            .y = r.y - scroll,
+            .w = r.w,
+            .h = r.h + scroll,
+            .pad = self.theme.pad,
+            .gap = self.theme.gap,
+        });
         return scroll;
     }
 
     pub fn endScroll(self: *Ui) void {
         _ = self.endVStack();
         self.popId();
+        self.cmds.push(.{ .scissor_pop = {} });
+    }
+
+    /// Toggle switch (checkbox alternative).
+    pub fn toggle(self: *Ui, opts: struct { id: []const u8, label: []const u8, value: *bool }) bool {
+        const i = self.id(opts.id);
+        const track_w: f32 = 40;
+        const track_h: f32 = 20;
+        const size = self.theme.font_size;
+        const m = self.font.measure(opts.label, size);
+        const r = self.alloc(track_w + 8 + m.w, self.theme.row_h);
+        const tr = Rect{
+            .x = r.x,
+            .y = r.y + (r.h - track_h) * 0.5,
+            .w = track_w,
+            .h = track_h,
+        };
+        const st = self.interact(i, r, false);
+        if (st.clicked) opts.value.* = !opts.value.*;
+        const fill: Color = if (opts.value.*) self.theme.accent else self.theme.slider_track;
+        self.drawRectBorder(tr, fill, self.theme.panel_border, 1);
+        const knob_x = if (opts.value.*) tr.x + tr.w - track_h + 2 else tr.x + 2;
+        self.drawRect(.{ .x = knob_x, .y = tr.y + 2, .w = track_h - 4, .h = track_h - 4 }, self.theme.text);
+        self.drawText(r.x + track_w + 8, r.y + (r.h - m.h) * 0.5, size, self.theme.text, opts.label);
+        return st.clicked;
+    }
+
+    /// Dropdown / select. `open` and `selected` are app-owned persistent state.
+    pub fn dropdown(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        items: []const []const u8,
+        selected: *usize,
+        open: *bool,
+        w: f32 = 200,
+    }) bool {
+        const i = self.id(opts.id);
+        const size = self.theme.font_size;
+        const r = self.alloc(opts.w, self.theme.row_h + 14);
+        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
+        const box = Rect{ .x = r.x, .y = r.y + 12, .w = opts.w, .h = self.theme.row_h };
+        const st = self.interact(i, box, false);
+        if (st.clicked) opts.open.* = !opts.open.*;
+
+        const sel = if (opts.selected.* < opts.items.len) opts.items[opts.selected.*] else "(none)";
+        self.drawRectBorder(box, self.theme.input_bg, if (opts.open.*) self.theme.accent else self.theme.panel_border, 1);
+        self.drawText(box.x + 6, box.y + 6, size, self.theme.text, sel);
+        self.drawText(box.x + box.w - 18, box.y + 6, size, self.theme.text_dim, if (opts.open.*) "^" else "v");
+
+        var changed = false;
+        if (opts.open.*) {
+            const item_h = self.theme.row_h;
+            const menu = Rect{
+                .x = box.x,
+                .y = box.y + box.h,
+                .w = box.w,
+                .h = item_h * @as(f32, @floatFromInt(opts.items.len)),
+            };
+            self.drawRectBorder(menu, self.theme.panel, self.theme.panel_border, 1);
+            for (opts.items, 0..) |item, idx| {
+                const ir = Rect{
+                    .x = menu.x,
+                    .y = menu.y + @as(f32, @floatFromInt(idx)) * item_h,
+                    .w = menu.w,
+                    .h = item_h,
+                };
+                var id_buf: [64]u8 = undefined;
+                const iid_s = std.fmt.bufPrint(&id_buf, "{s}#{d}", .{ opts.id, idx }) catch "dd";
+                const iid = self.id(iid_s);
+                const ist = self.interact(iid, ir, false);
+                if (ist.hot or opts.selected.* == idx) {
+                    self.drawRect(ir, if (opts.selected.* == idx) self.theme.selected else self.theme.button_hot);
+                }
+                self.drawText(ir.x + 6, ir.y + 6, size, self.theme.text, item);
+                if (ist.clicked) {
+                    opts.selected.* = idx;
+                    opts.open.* = false;
+                    changed = true;
+                }
+            }
+            // Click outside closes (if not over menu/box).
+            if (self.input.mousePressed(.left)) {
+                const over = box.contains(self.input.mouse_x, self.input.mouse_y) or
+                    menu.contains(self.input.mouse_x, self.input.mouse_y);
+                if (!over) opts.open.* = false;
+            }
+        }
+        return changed;
+    }
+
+    /// Horizontal tab bar. Returns true if selection changed.
+    pub fn tabs(self: *Ui, opts: struct {
+        id: []const u8,
+        items: []const []const u8,
+        selected: *usize,
+        w: f32 = 0,
+    }) bool {
+        const bar_w = if (opts.w > 0) opts.w else self.top().width - 2 * self.top().pad;
+        const r = self.alloc(bar_w, self.theme.row_h + 4);
+        const n: f32 = @floatFromInt(@max(opts.items.len, 1));
+        const tw = bar_w / n;
+        var changed = false;
+        self.pushId(opts.id);
+        defer self.popId();
+        for (opts.items, 0..) |item, idx| {
+            const tr = Rect{
+                .x = r.x + @as(f32, @floatFromInt(idx)) * tw,
+                .y = r.y,
+                .w = tw - 2,
+                .h = r.h,
+            };
+            const tid = self.id(item);
+            const st = self.interact(tid, tr, false);
+            const on = opts.selected.* == idx;
+            const fill: Color = if (on) self.theme.selected else if (st.hot) self.theme.button_hot else self.theme.button;
+            self.drawRectBorder(tr, fill, self.theme.panel_border, 1);
+            const m = self.font.measure(item, self.theme.font_size);
+            self.drawText(tr.x + (tr.w - m.w) * 0.5, tr.y + (tr.h - m.h) * 0.5, self.theme.font_size, if (on) self.theme.accent else self.theme.text, item);
+            if (st.clicked) {
+                opts.selected.* = idx;
+                changed = true;
+            }
+        }
+        return changed;
     }
 };
