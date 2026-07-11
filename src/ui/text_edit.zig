@@ -728,10 +728,6 @@ pub fn moveDown(edit: *Edit, text: []const u8, extend: bool, font: ?*const Font,
     edit.block = false;
 }
 
-fn maxRow(text: []const u8) usize {
-    return rowOf(text, text.len);
-}
-
 fn hasCaretAt(edit: *const Edit, pos: usize) bool {
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
@@ -741,23 +737,71 @@ fn hasCaretAt(edit: *const Edit, pos: usize) bool {
     return false;
 }
 
-/// Alt+Shift+Up/Down: add a caret on the next line above/below the current extreme,
-/// at the preferred column (VS Code “Add Cursor Above/Below”).
-pub fn addCaretVertical(edit: *Edit, text: []const u8, delta_row: i32) void {
+/// Alt+Shift+Up/Down (or Ctrl+Alt+Up/Down): add a caret on the next visual line
+/// above/below the current extreme, at the preferred column
+/// (VS Code “Add Cursor Above/Below”).
+///
+/// Uses soft-wrap visual rows when `font` + `wrap_px` are set so multi-caret
+/// still works across hard newlines *and* soft-wrapped display lines. Buffer
+/// is never mutated.
+pub fn addCaretVertical(
+    edit: *Edit,
+    text: []const u8,
+    delta_row: i32,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
     if (edit.caret_ct == 0 or delta_row == 0) return;
+    if (edit.caret_ct >= MaxCarets) return;
 
-    // Session start: remember origin for Esc, lock column from primary.
-    if (edit.caret_ct == 1 and !edit.ctrl_d_active) {
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    const rows: []const VisualRow = if (font) |f| blk: {
+        const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+        break :blk rows_buf[0..n];
+    } else blk: {
+        // Hard-line fallback (one visual row per hard line).
+        var count: usize = 0;
+        var i: usize = 0;
+        while (i <= text.len and count < rows_buf.len) {
+            const le = lineEnd(text, i);
+            rows_buf[count] = .{ .start = i, .end = le };
+            count += 1;
+            if (le < text.len and text[le] == '\n') {
+                i = le + 1;
+                if (i == text.len) {
+                    // trailing newline → empty last row
+                    if (count < rows_buf.len) {
+                        rows_buf[count] = .{ .start = i, .end = i };
+                        count += 1;
+                    }
+                    break;
+                }
+            } else break;
+        }
+        if (count == 0) {
+            rows_buf[0] = .{ .start = 0, .end = text.len };
+            count = 1;
+        }
+        break :blk rows_buf[0..count];
+    };
+    if (rows.len == 0) return;
+
+    // Session start: remember origin for Esc; lock column from primary visual row.
+    if (edit.caret_ct == 1) {
         edit.ctrl_d_origin = edit.carets[0].caret;
-        edit.preferred_col = colOf(text, edit.carets[0].caret);
+        const vr0 = visualRowOf(rows, edit.carets[0].caret);
+        const rs = rows[vr0].start;
+        const caret = edit.carets[0].caret;
+        edit.preferred_col = if (caret >= rs) caret - rs else 0;
         // Collapse primary selection so we place a bare caret column.
         edit.carets[0].anchor = edit.carets[0].caret;
     }
 
-    var extreme_row: usize = rowOf(text, edit.carets[0].caret);
+    var extreme_row: usize = visualRowOf(rows, edit.carets[0].caret);
     var i: usize = 1;
     while (i < edit.caret_ct) : (i += 1) {
-        const r = rowOf(text, edit.carets[i].caret);
+        const r = visualRowOf(rows, edit.carets[i].caret);
         if (delta_row < 0) {
             extreme_row = @min(extreme_row, r);
         } else {
@@ -770,14 +814,12 @@ pub fn addCaretVertical(edit: *Edit, text: []const u8, delta_row: i32) void {
         if (extreme_row == 0) return;
         new_row = extreme_row - 1;
     } else {
-        const last = maxRow(text);
-        if (extreme_row >= last) return;
+        if (extreme_row + 1 >= rows.len) return;
         new_row = extreme_row + 1;
     }
 
-    const pos = posAtRowCol(text, new_row, edit.preferred_col);
+    const pos = posAtVisualRowCol(rows, text, new_row, edit.preferred_col);
     if (hasCaretAt(edit, pos)) return;
-    if (edit.caret_ct >= MaxCarets) return;
 
     edit.carets[edit.caret_ct] = .{ .caret = pos, .anchor = pos };
     edit.caret_ct += 1;
@@ -1016,10 +1058,11 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
+    // Add Cursor Above/Below: Alt+Shift+↑/↓ or Ctrl+Alt+↑/↓ (VS Code-ish).
+    const add_cursor_vert = (alt and shift) or (ctrl and alt);
     if (multiline and input.keyPressed(.up)) {
-        if (alt and shift) {
-            // Alt+Shift+Up: add caret on line above (column multi-cursor)
-            addCaretVertical(edit, text, -1);
+        if (add_cursor_vert) {
+            addCaretVertical(edit, text, -1, font, font_size, wrap_px);
         } else {
             moveUp(edit, text, shift, font, font_size, wrap_px);
             edit.ctrl_d_active = false;
@@ -1027,9 +1070,8 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
     }
     if (multiline and input.keyPressed(.down)) {
-        if (alt and shift) {
-            // Alt+Shift+Down: add caret on line below
-            addCaretVertical(edit, text, 1);
+        if (add_cursor_vert) {
+            addCaretVertical(edit, text, 1, font, font_size, wrap_px);
         } else {
             moveDown(edit, text, shift, font, font_size, wrap_px);
             edit.ctrl_d_active = false;
@@ -1352,23 +1394,21 @@ test "ctrlD Esc restores origin caret and clears selection" {
 
 test "alt-shift add caret above/below and Esc restores" {
     const text = "abc def ghi jkl\nabc def zhi jkl\nabc def xhi jkl";
-    //              ^0            ^16(z)           ^32(x) roughly
-    // find z
     const z_pos = std.mem.indexOfScalar(u8, text, 'z').?;
     const g_pos = std.mem.indexOfScalar(u8, text, 'g').?;
     const x_pos = std.mem.indexOfScalar(u8, text, 'x').?;
     var edit: Edit = .{};
     edit.carets[0] = .{ .caret = z_pos, .anchor = z_pos };
-    addCaretVertical(&edit, text, -1);
+    // null font → hard-line visual rows (no soft wrap)
+    addCaretVertical(&edit, text, -1, null, 1, 0);
     try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
     try std.testing.expectEqual(z_pos, edit.carets[0].caret);
     try std.testing.expectEqual(g_pos, edit.carets[1].caret);
     try std.testing.expectEqual(z_pos, edit.ctrl_d_origin);
 
-    // reset and try down
     edit = .{};
     edit.carets[0] = .{ .caret = z_pos, .anchor = z_pos };
-    addCaretVertical(&edit, text, 1);
+    addCaretVertical(&edit, text, 1, null, 1, 0);
     try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
     try std.testing.expectEqual(z_pos, edit.carets[0].caret);
     try std.testing.expectEqual(x_pos, edit.carets[1].caret);
