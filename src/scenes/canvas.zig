@@ -566,25 +566,96 @@ pub fn frame(a: *app.App) void {
         st.canvas_pitch = 0;
     }
 
-    // Dolly (wheel)
+    // Dolly (wheel) — cancel frame tween if user zooms
     const dy = u.wheelY();
     if (dy != 0) {
         const factor: f32 = if (dy > 0) 0.9 else 1.0 / 0.9;
         st.canvas_dist = std.math.clamp(st.canvas_dist * factor, 80, 2500);
+        st.canvas_tween_t = -1;
         u.eatScroll();
     }
 
-    // Orbit pivot: selected entity (primary), else current look-target (= screen center focus).
-    if (a.input.mousePressed(.middle)) {
-        st.canvas_orbiting = true;
-        const pivot = orbitPivot(st);
-        st.canvas_tx = pivot.x;
-        st.canvas_ty = pivot.y;
-        st.canvas_tz = pivot.z;
+    // Numpad `.` / period: frame selection (center + zoom to ~80% viewport), 250ms ease.
+    if (a.input.keyPressed(.period) and st.canvas_sel_mask != 0 and u.focus.isNone()) {
+        var bmin = Vec3{ .x = 1e9, .y = 1e9, .z = 1e9 };
+        var bmax = Vec3{ .x = -1e9, .y = -1e9, .z = -1e9 };
+        var any = false;
+        for (ents, 0..) |e, i| {
+            if (!isSelected(st, i)) continue;
+            any = true;
+            bmin.x = @min(bmin.x, e.pos.x - e.half);
+            bmin.y = @min(bmin.y, e.pos.y - e.half);
+            bmin.z = @min(bmin.z, e.pos.z - e.half);
+            bmax.x = @max(bmax.x, e.pos.x + e.half);
+            bmax.y = @max(bmax.y, e.pos.y + e.half);
+            bmax.z = @max(bmax.z, e.pos.z + e.half);
+        }
+        if (any) {
+            const center = Vec3{
+                .x = (bmin.x + bmax.x) * 0.5,
+                .y = (bmin.y + bmax.y) * 0.5,
+                .z = (bmin.z + bmax.z) * 0.5,
+            };
+            const ext = Vec3.sub(bmax, bmin);
+            // Bounding sphere radius from AABB half-diagonal.
+            const radius = 0.5 * @sqrt(ext.x * ext.x + ext.y * ext.y + ext.z * ext.z);
+            const fov = 50.0 * std.math.pi / 180.0;
+            // Fit sphere to ~80% of vertical FOV: R / d = tan(0.4 * fov_y).
+            const half_fit = 0.4 * fov;
+            var dist = radius / @tan(half_fit);
+            // Also respect horizontal FOV on wide screens.
+            const aspect = w / @max(h, 1);
+            if (aspect > 1) {
+                const half_h_fit = @atan(@tan(half_fit) * aspect);
+                dist = @max(dist, radius / @tan(half_h_fit));
+            }
+            dist = std.math.clamp(dist, 80, 2500);
+
+            st.canvas_tween_from_tx = st.canvas_tx;
+            st.canvas_tween_from_ty = st.canvas_ty;
+            st.canvas_tween_from_tz = st.canvas_tz;
+            st.canvas_tween_from_dist = st.canvas_dist;
+            st.canvas_tween_to_tx = center.x;
+            st.canvas_tween_to_ty = center.y;
+            st.canvas_tween_to_tz = center.z;
+            st.canvas_tween_to_dist = dist;
+            st.canvas_tween_t = 0;
+        }
     }
-    if (a.input.mouseReleased(.middle)) st.canvas_orbiting = false;
-    if (st.canvas_orbiting and a.input.mouseDown(.middle)) {
-        // Keep orbiting the selection if it is still the primary.
+
+    // Advance frame tween (smoothstep ease).
+    if (st.canvas_tween_t >= 0) {
+        const dur: f32 = 0.25;
+        st.canvas_tween_t = @min(1, st.canvas_tween_t + a.dt / dur);
+        const t = st.canvas_tween_t;
+        const s = t * t * (3 - 2 * t); // smoothstep
+        st.canvas_tx = st.canvas_tween_from_tx + (st.canvas_tween_to_tx - st.canvas_tween_from_tx) * s;
+        st.canvas_ty = st.canvas_tween_from_ty + (st.canvas_tween_to_ty - st.canvas_tween_from_ty) * s;
+        st.canvas_tz = st.canvas_tween_from_tz + (st.canvas_tween_to_tz - st.canvas_tween_from_tz) * s;
+        st.canvas_dist = st.canvas_tween_from_dist + (st.canvas_tween_to_dist - st.canvas_tween_from_dist) * s;
+        if (st.canvas_tween_t >= 1) st.canvas_tween_t = -1;
+    }
+
+    // Middle mouse: orbit, or Shift+MMB strafe (pan in camera plane).
+    if (a.input.mousePressed(.middle)) {
+        st.canvas_tween_t = -1; // user takes over
+        if (a.input.shift) {
+            st.canvas_strafing = true;
+            st.canvas_orbiting = false;
+        } else {
+            st.canvas_orbiting = true;
+            st.canvas_strafing = false;
+            const pivot = orbitPivot(st);
+            st.canvas_tx = pivot.x;
+            st.canvas_ty = pivot.y;
+            st.canvas_tz = pivot.z;
+        }
+    }
+    if (a.input.mouseReleased(.middle)) {
+        st.canvas_orbiting = false;
+        st.canvas_strafing = false;
+    }
+    if (st.canvas_orbiting and a.input.mouseDown(.middle) and !a.input.shift) {
         if (st.canvas_sel_primary >= 0) {
             const pivot = orbitPivot(st);
             st.canvas_tx = pivot.x;
@@ -592,27 +663,31 @@ pub fn frame(a: *app.App) void {
             st.canvas_tz = pivot.z;
         }
         const sens: f32 = 0.005;
-        // Horizontal (yaw): do NOT flip — drag left shows left side of cube.
-        // Vertical (pitch): ONLY flip — drag up shows underside of cube (from front).
         st.canvas_yaw -= a.input.mouse_dx * sens;
         st.canvas_pitch -= a.input.mouse_dy * sens;
         const lim: f32 = std.math.pi * 0.5 - 0.02;
         st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
     }
 
-    // Pan — Space + LMB (move look target in camera plane)
+    // Pan — Space+LMB or Shift+MMB strafe
     const space_pan = a.input.keyDown(.space) and a.input.mouseDown(.left);
     if (space_pan) st.canvas_panning = true;
     if (!a.input.mouseDown(.left) or !a.input.keyDown(.space)) st.canvas_panning = false;
+    // If shift held during MMB drag after starting orbit, treat as strafe.
+    if (a.input.mouseDown(.middle) and a.input.shift) {
+        st.canvas_strafing = true;
+        st.canvas_orbiting = false;
+    }
 
     var cam = buildCam(st);
-    if (st.canvas_panning) {
+    if (st.canvas_panning or (st.canvas_strafing and a.input.mouseDown(.middle))) {
         const k = st.canvas_dist * 0.0022;
         const r = Vec3.scale(cam.right, -a.input.mouse_dx * k);
         const uu = Vec3.scale(cam.up, a.input.mouse_dy * k);
         st.canvas_tx += r.x + uu.x;
         st.canvas_ty += r.y + uu.y;
         st.canvas_tz += r.z + uu.z;
+        st.canvas_tween_t = -1;
         cam = buildCam(st);
     }
 
@@ -736,8 +811,8 @@ pub fn frame(a: *app.App) void {
 
     // HUD
     u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
-    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit  |  Space+LMB pan  |  wheel dolly  |  WASD+QE fly");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "LMB select  ·  Ctrl/Shift multi  ·  Shift=fast fly  ·  7/1/3 views");
+    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
+    u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  Numpad . frame sel  ·  7/1/3 views  ·  Ctrl/Shift multi");
 
     var buf: [96]u8 = undefined;
     const nsel = @popCount(st.canvas_sel_mask);

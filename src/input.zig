@@ -44,6 +44,8 @@ pub const Key = enum {
     eight,
     nine,
     zero,
+    /// Period / numpad decimal (Blender frame-selected).
+    period,
 };
 
 pub const MouseButton = enum { left, right, middle };
@@ -289,6 +291,8 @@ pub const Input = struct {
             .KP_8 => .eight,
             .KP_9 => .nine,
             .KP_0 => .zero,
+            .PERIOD => .period,
+            .KP_DECIMAL => .period,
             else => null,
         };
     }
