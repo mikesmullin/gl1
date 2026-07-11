@@ -1,14 +1,16 @@
-//! Canvas scene — mini Blender-like 3D viewport.
+//! Canvas / editor — Blender-like 3D viewport + Unity-style editor panels.
 //! - MMB drag: orbit about look target
 //! - Space+LMB: pan target in the camera plane
 //! - Wheel: dolly (distance)
 //! - Numpad / keys 7, 1, 3: Top / Front / Right (Blender convention)
-//! - LMB click: select entity (accent outline) — demo “ECS” cubes
+//! - LMB click: select entity (accent outline)
+//! - Floating panels: scene tree (left), inspector (right), console (bottom)
 
 const std = @import("std");
 const app = @import("../app.zig");
 const ui = @import("../ui/ui.zig");
 const state = @import("state.zig");
+const editor = @import("editor.zig");
 const anim = @import("../anim.zig");
 const sgl = @import("sokol").gl;
 
@@ -236,58 +238,55 @@ fn screenToWorldRayBasis(mx: f32, my: f32, w: f32, h: f32, cam: Cam) Ray {
     return .{ .pos = cam.eye, .dir = dir };
 }
 
-const Entity = struct {
-    pos: Vec3,
-    half: f32,
-    color: ui.Color,
-    name: []const u8,
-};
-
-/// Demo world: each cube is a stand-in for an ECS entity.
-/// (No “Origin” mesh — world origin is implied by the compass + grid.)
-const ents = [_]Entity{
-    .{ .pos = .{ .x = 120, .y = 14, .z = -40 }, .half = 16, .color = .{ 0.3, 0.85, 0.4, 1 }, .name = "Hero" },
-    .{ .pos = .{ .x = -80, .y = 18, .z = 90 }, .half = 18, .color = .{ 0.3, 0.5, 0.95, 1 }, .name = "Slime" },
-    .{ .pos = .{ .x = 200, .y = 12, .z = 140 }, .half = 12, .color = .{ 0.95, 0.8, 0.2, 1 }, .name = "Torch" },
-    .{ .pos = .{ .x = -160, .y = 22, .z = -100 }, .half = 20, .color = .{ 0.75, 0.4, 0.9, 1 }, .name = "Crystal" },
-    .{ .pos = .{ .x = 40, .y = 16, .z = 60 }, .half = 14, .color = .{ 0.9, 0.55, 0.2, 1 }, .name = "Crate" },
-};
-
-fn isSelected(st: *const state.State, i: usize) bool {
-    return (st.canvas_sel_mask & (@as(u32, 1) << @intCast(i))) != 0;
-}
-
-fn setSelected(st: *state.State, i: usize, on: bool) void {
-    const bit = @as(u32, 1) << @intCast(i);
-    if (on) st.canvas_sel_mask |= bit else st.canvas_sel_mask &= ~bit;
-}
-
-fn clearSelection(st: *state.State) void {
-    st.canvas_sel_mask = 0;
-    st.canvas_sel_primary = -1;
-}
-
-fn selectAll(st: *state.State) void {
-    var mask: u32 = 0;
-    var i: usize = 0;
-    while (i < ents.len) : (i += 1) mask |= @as(u32, 1) << @intCast(i);
-    st.canvas_sel_mask = mask;
-    st.canvas_sel_primary = if (ents.len > 0) 0 else -1;
-}
-
-/// A: toggle select-all / select-none (Blender-ish).
 fn toggleSelectAll(st: *state.State) void {
-    const all_mask: u32 = blk: {
-        var m: u32 = 0;
-        var i: usize = 0;
-        while (i < ents.len) : (i += 1) m |= @as(u32, 1) << @intCast(i);
-        break :blk m;
-    };
-    if (st.canvas_sel_mask == all_mask) {
-        clearSelection(st);
-    } else {
-        selectAll(st);
+    // If everything alive is selected → clear; else select all alive.
+    var all_mask: u32 = 0;
+    var i: usize = 0;
+    while (i < state.max_entities) : (i += 1) {
+        if (st.entities[i].alive) all_mask |= @as(u32, 1) << @intCast(i);
     }
+    if (all_mask != 0 and st.canvas_sel_mask == all_mask) {
+        st.clearSelection();
+    } else {
+        st.selectAllAlive();
+    }
+}
+
+fn entityPos(e: *const state.WorldEntity) Vec3 {
+    return .{ .x = e.pos_x, .y = e.pos_y, .z = e.pos_z };
+}
+
+/// Local offset → world (scale + Yaw/Pitch/Roll as ZYX-ish: Y then X then Z simplified as Y only for mesh).
+fn xformLocal(e: *const state.WorldEntity, lx: f32, ly: f32, lz: f32) Vec3 {
+    const s = @max(0.05, e.scale);
+    var x = lx * s;
+    var y = ly * s;
+    var z = lz * s;
+    // Rot Y (degrees)
+    const ry = e.rot_y * std.math.pi / 180.0;
+    const cy = @cos(ry);
+    const sy = @sin(ry);
+    const x1 = x * cy + z * sy;
+    const z1 = -x * sy + z * cy;
+    x = x1;
+    z = z1;
+    // Rot X
+    const rx = e.rot_x * std.math.pi / 180.0;
+    const cx = @cos(rx);
+    const sx = @sin(rx);
+    const y1 = y * cx - z * sx;
+    const z2 = y * sx + z * cx;
+    y = y1;
+    z = z2;
+    // Rot Z
+    const rz = e.rot_z * std.math.pi / 180.0;
+    const cz = @cos(rz);
+    const sz = @sin(rz);
+    const x2 = x * cz - y * sz;
+    const y2 = x * sz + y * cz;
+    x = x2;
+    y = y2;
+    return .{ .x = e.pos_x + x, .y = e.pos_y + y, .z = e.pos_z + z };
 }
 
 const Cam = struct {
@@ -344,121 +343,74 @@ fn buildCam(st: *const state.State) Cam {
 
 
 
-fn drawCube(e: Entity, selected: bool, accent: ui.Color) void {
+fn drawCube(e: *const state.WorldEntity, selected: bool, accent: ui.Color) void {
     const h = e.half;
-    const p = e.pos;
-    // 6 faces, slight per-face shade (fake light from upper-right)
-    const faces = [_]struct { n: Vec3, verts: [4]Vec3 }{
-        .{ // +Y top
-            .n = .{ .x = 0, .y = 1, .z = 0 },
-            .verts = .{
-                .{ .x = p.x - h, .y = p.y + h, .z = p.z - h },
-                .{ .x = p.x + h, .y = p.y + h, .z = p.z - h },
-                .{ .x = p.x + h, .y = p.y + h, .z = p.z + h },
-                .{ .x = p.x - h, .y = p.y + h, .z = p.z + h },
-            },
-        },
-        .{ // -Y bottom
-            .n = .{ .x = 0, .y = -1, .z = 0 },
-            .verts = .{
-                .{ .x = p.x - h, .y = p.y - h, .z = p.z + h },
-                .{ .x = p.x + h, .y = p.y - h, .z = p.z + h },
-                .{ .x = p.x + h, .y = p.y - h, .z = p.z - h },
-                .{ .x = p.x - h, .y = p.y - h, .z = p.z - h },
-            },
-        },
-        .{ // +Z
-            .n = .{ .x = 0, .y = 0, .z = 1 },
-            .verts = .{
-                .{ .x = p.x - h, .y = p.y - h, .z = p.z + h },
-                .{ .x = p.x + h, .y = p.y - h, .z = p.z + h },
-                .{ .x = p.x + h, .y = p.y + h, .z = p.z + h },
-                .{ .x = p.x - h, .y = p.y + h, .z = p.z + h },
-            },
-        },
-        .{ // -Z
-            .n = .{ .x = 0, .y = 0, .z = -1 },
-            .verts = .{
-                .{ .x = p.x + h, .y = p.y - h, .z = p.z - h },
-                .{ .x = p.x - h, .y = p.y - h, .z = p.z - h },
-                .{ .x = p.x - h, .y = p.y + h, .z = p.z - h },
-                .{ .x = p.x + h, .y = p.y + h, .z = p.z - h },
-            },
-        },
-        .{ // +X
-            .n = .{ .x = 1, .y = 0, .z = 0 },
-            .verts = .{
-                .{ .x = p.x + h, .y = p.y - h, .z = p.z + h },
-                .{ .x = p.x + h, .y = p.y - h, .z = p.z - h },
-                .{ .x = p.x + h, .y = p.y + h, .z = p.z - h },
-                .{ .x = p.x + h, .y = p.y + h, .z = p.z + h },
-            },
-        },
-        .{ // -X
-            .n = .{ .x = -1, .y = 0, .z = 0 },
-            .verts = .{
-                .{ .x = p.x - h, .y = p.y - h, .z = p.z - h },
-                .{ .x = p.x - h, .y = p.y - h, .z = p.z + h },
-                .{ .x = p.x - h, .y = p.y + h, .z = p.z + h },
-                .{ .x = p.x - h, .y = p.y + h, .z = p.z - h },
-            },
-        },
+    // Local-space cube corners → world via scale + euler
+    const local_faces = [_]struct { n: Vec3, verts: [4]Vec3 }{
+        .{ .n = .{ .x = 0, .y = 1, .z = 0 }, .verts = .{
+            .{ .x = -h, .y = h, .z = -h }, .{ .x = h, .y = h, .z = -h }, .{ .x = h, .y = h, .z = h }, .{ .x = -h, .y = h, .z = h },
+        } },
+        .{ .n = .{ .x = 0, .y = -1, .z = 0 }, .verts = .{
+            .{ .x = -h, .y = -h, .z = h }, .{ .x = h, .y = -h, .z = h }, .{ .x = h, .y = -h, .z = -h }, .{ .x = -h, .y = -h, .z = -h },
+        } },
+        .{ .n = .{ .x = 0, .y = 0, .z = 1 }, .verts = .{
+            .{ .x = -h, .y = -h, .z = h }, .{ .x = h, .y = -h, .z = h }, .{ .x = h, .y = h, .z = h }, .{ .x = -h, .y = h, .z = h },
+        } },
+        .{ .n = .{ .x = 0, .y = 0, .z = -1 }, .verts = .{
+            .{ .x = h, .y = -h, .z = -h }, .{ .x = -h, .y = -h, .z = -h }, .{ .x = -h, .y = h, .z = -h }, .{ .x = h, .y = h, .z = -h },
+        } },
+        .{ .n = .{ .x = 1, .y = 0, .z = 0 }, .verts = .{
+            .{ .x = h, .y = -h, .z = h }, .{ .x = h, .y = -h, .z = -h }, .{ .x = h, .y = h, .z = -h }, .{ .x = h, .y = h, .z = h },
+        } },
+        .{ .n = .{ .x = -1, .y = 0, .z = 0 }, .verts = .{
+            .{ .x = -h, .y = -h, .z = -h }, .{ .x = -h, .y = -h, .z = h }, .{ .x = -h, .y = h, .z = h }, .{ .x = -h, .y = h, .z = -h },
+        } },
     };
 
     const light = Vec3.norm(.{ .x = 0.4, .y = 0.85, .z = 0.35 });
     sgl.beginQuads();
-    for (faces) |face| {
-        const ndl = @max(0.25, Vec3.dot(face.n, light));
+    for (local_faces) |face| {
+        // Transform normal by rotation only (approx: use face center delta)
+        const n0 = xformLocal(e, face.n.x, face.n.y, face.n.z);
+        const n1 = xformLocal(e, 0, 0, 0);
+        const nw = Vec3.norm(Vec3.sub(n0, n1));
+        const ndl = @max(0.25, Vec3.dot(nw, light));
         sgl.c4f(e.color[0] * ndl, e.color[1] * ndl, e.color[2] * ndl, e.color[3]);
-        for (face.verts) |v| sgl.v3f(v.x, v.y, v.z);
+        for (face.verts) |lv| {
+            const v = xformLocal(e, lv.x, lv.y, lv.z);
+            sgl.v3f(v.x, v.y, v.z);
+        }
     }
     sgl.end();
 
     // Selection outline — expanded wireframe in accent
     if (selected) {
-        const o = h + 2.5;
-        const c = e.pos;
-        const corners = [_]Vec3{
-            .{ .x = c.x - o, .y = c.y - o, .z = c.z - o },
-            .{ .x = c.x + o, .y = c.y - o, .z = c.z - o },
-            .{ .x = c.x + o, .y = c.y + o, .z = c.z - o },
-            .{ .x = c.x - o, .y = c.y + o, .z = c.z - o },
-            .{ .x = c.x - o, .y = c.y - o, .z = c.z + o },
-            .{ .x = c.x + o, .y = c.y - o, .z = c.z + o },
-            .{ .x = c.x + o, .y = c.y + o, .z = c.z + o },
-            .{ .x = c.x - o, .y = c.y + o, .z = c.z + o },
-        };
         const edges = [_][2]u8{
             .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 0 },
             .{ 4, 5 }, .{ 5, 6 }, .{ 6, 7 }, .{ 7, 4 },
             .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 },
         };
         sgl.beginLines();
-        sgl.c4f(accent[0], accent[1], accent[2], 1);
-        for (edges) |ed| {
-            const a = corners[ed[0]];
-            const b = corners[ed[1]];
-            sgl.v3f(a.x, a.y, a.z);
-            sgl.v3f(b.x, b.y, b.z);
-        }
-        // second pass slightly larger for “shader outline” thickness
-        sgl.c4f(accent[0], accent[1], accent[2], 0.55);
-        const o2 = h + 4.0;
-        const corners2 = [_]Vec3{
-            .{ .x = c.x - o2, .y = c.y - o2, .z = c.z - o2 },
-            .{ .x = c.x + o2, .y = c.y - o2, .z = c.z - o2 },
-            .{ .x = c.x + o2, .y = c.y + o2, .z = c.z - o2 },
-            .{ .x = c.x - o2, .y = c.y + o2, .z = c.z - o2 },
-            .{ .x = c.x - o2, .y = c.y - o2, .z = c.z + o2 },
-            .{ .x = c.x + o2, .y = c.y - o2, .z = c.z + o2 },
-            .{ .x = c.x + o2, .y = c.y + o2, .z = c.z + o2 },
-            .{ .x = c.x - o2, .y = c.y + o2, .z = c.z + o2 },
-        };
-        for (edges) |ed| {
-            const a = corners2[ed[0]];
-            const b = corners2[ed[1]];
-            sgl.v3f(a.x, a.y, a.z);
-            sgl.v3f(b.x, b.y, b.z);
+        var pass: u32 = 0;
+        while (pass < 2) : (pass += 1) {
+            const pad: f32 = if (pass == 0) 2.5 else 4.0;
+            const hl = e.half + pad / @max(0.05, e.scale);
+            const cl = [_]Vec3{
+                .{ .x = -hl, .y = -hl, .z = -hl }, .{ .x = hl, .y = -hl, .z = -hl },
+                .{ .x = hl, .y = hl, .z = -hl }, .{ .x = -hl, .y = hl, .z = -hl },
+                .{ .x = -hl, .y = -hl, .z = hl }, .{ .x = hl, .y = -hl, .z = hl },
+                .{ .x = hl, .y = hl, .z = hl }, .{ .x = -hl, .y = hl, .z = hl },
+            };
+            var corners: [8]Vec3 = undefined;
+            for (cl, 0..) |c, ci| corners[ci] = xformLocal(e, c.x, c.y, c.z);
+            const a_col: f32 = if (pass == 0) 1 else 0.55;
+            sgl.c4f(accent[0], accent[1], accent[2], a_col);
+            for (edges) |ed| {
+                const a = corners[ed[0]];
+                const b = corners[ed[1]];
+                sgl.v3f(a.x, a.y, a.z);
+                sgl.v3f(b.x, b.y, b.z);
+            }
         }
         sgl.end();
     }
@@ -544,12 +496,17 @@ fn rayAabb(orig: Vec3, dir: Vec3, bmin: Vec3, bmax: Vec3) ?f32 {
 
 /// Pick solid cube only (labels never generate hits). Game9 pattern:
 /// build ray once, then run per-object intersection, keep nearest hit.
-fn pickEntity(ray: Ray) i32 {
+/// Uses axis-aligned bounds from position ± halfScaled (rotation ignored for pick).
+fn pickEntity(st: *const state.State, ray: Ray) i32 {
     var best: i32 = -1;
     var best_t: f32 = 1e9;
-    for (ents, 0..) |e, i| {
-        const bmin = Vec3{ .x = e.pos.x - e.half, .y = e.pos.y - e.half, .z = e.pos.z - e.half };
-        const bmax = Vec3{ .x = e.pos.x + e.half, .y = e.pos.y + e.half, .z = e.pos.z + e.half };
+    var i: usize = 0;
+    while (i < state.max_entities) : (i += 1) {
+        const e = &st.entities[i];
+        if (!e.alive) continue;
+        const hs = e.halfScaled();
+        const bmin = Vec3{ .x = e.pos_x - hs, .y = e.pos_y - hs, .z = e.pos_z - hs };
+        const bmax = Vec3{ .x = e.pos_x + hs, .y = e.pos_y + hs, .z = e.pos_z + hs };
         if (rayAabb(ray.pos, ray.dir, bmin, bmax)) |hit_t| {
             if (hit_t < best_t) {
                 best_t = hit_t;
@@ -594,19 +551,22 @@ pub fn frame(a: *app.App) void {
     // Numpad `.` / period: frame selection (center + zoom ~80% viewport).
     // Driven by Game9-inspired Timer + parallel Tweens (250ms, smoothstep).
     // Numpad `.` / period, or F (Blender-ish frame selected).
-    if ((a.input.keyPressed(.period) or a.input.keyPressed(.f)) and st.canvas_sel_mask != 0 and u.focus.isNone()) {
+    if ((a.input.keyPressed(.period) or a.input.keyPressed(.f)) and st.selectionCount() != 0 and u.focus.isNone()) {
         var bmin = Vec3{ .x = 1e9, .y = 1e9, .z = 1e9 };
         var bmax = Vec3{ .x = -1e9, .y = -1e9, .z = -1e9 };
         var any = false;
-        for (ents, 0..) |e, i| {
-            if (!isSelected(st, i)) continue;
+        var fi: usize = 0;
+        while (fi < state.max_entities) : (fi += 1) {
+            if (!st.isSelected(fi)) continue;
+            const e = &st.entities[fi];
+            const hs = e.halfScaled();
             any = true;
-            bmin.x = @min(bmin.x, e.pos.x - e.half);
-            bmin.y = @min(bmin.y, e.pos.y - e.half);
-            bmin.z = @min(bmin.z, e.pos.z - e.half);
-            bmax.x = @max(bmax.x, e.pos.x + e.half);
-            bmax.y = @max(bmax.y, e.pos.y + e.half);
-            bmax.z = @max(bmax.z, e.pos.z + e.half);
+            bmin.x = @min(bmin.x, e.pos_x - hs);
+            bmin.y = @min(bmin.y, e.pos_y - hs);
+            bmin.z = @min(bmin.z, e.pos_z - hs);
+            bmax.x = @max(bmax.x, e.pos_x + hs);
+            bmax.y = @max(bmax.y, e.pos_y + hs);
+            bmax.z = @max(bmax.z, e.pos_z + hs);
         }
         if (any) {
             const center = Vec3{
@@ -742,39 +702,6 @@ pub fn frame(a: *app.App) void {
     const pv = Mat4.mul(mat_p, mat_v);
     _ = pv;
 
-    // Select — LMB on mesh only. Ctrl/Shift = multi-select toggle; plain click replaces.
-    if (a.input.mousePressed(.left) and !a.input.keyDown(.space) and !u.palette_open) {
-        // Basis ray matches sgl lookat eye-space (was mis-calibrated when lookat matrix was transposed).
-        const ray = screenToWorldRayBasis(a.input.mouse_x, a.input.mouse_y, w, h, cam);
-        const hit = pickEntity(ray);
-        const multi = a.input.ctrl or a.input.shift;
-        if (hit < 0) {
-            if (!multi) clearSelection(st);
-        } else {
-            const iu: usize = @intCast(hit);
-            if (multi) {
-                const on = !isSelected(st, iu);
-                setSelected(st, iu, on);
-                if (on) st.canvas_sel_primary = hit else if (st.canvas_sel_primary == hit) {
-                    // Primary deselected — fall back to any remaining bit.
-                    st.canvas_sel_primary = -1;
-                    var bi: usize = 0;
-                    while (bi < ents.len) : (bi += 1) {
-                        if (isSelected(st, bi)) {
-                            st.canvas_sel_primary = @intCast(bi);
-                            break;
-                        }
-                    }
-                }
-            } else {
-                clearSelection(st);
-                setSelected(st, iu, true);
-                st.canvas_sel_primary = hit;
-            }
-            u.log("canvas select");
-        }
-    }
-
     // --- 3D pass (sgl builds the same perspective/lookat we use for rays) ---
     sgl.defaults();
     if (a.pip_3d.id != 0) sgl.loadPipeline(a.pip_3d);
@@ -797,8 +724,13 @@ pub fn frame(a: *app.App) void {
 
     drawGrid(400, 40);
 
-    for (ents, 0..) |e, i| {
-        drawCube(e, isSelected(st, i), u.theme.accent);
+    {
+        var di: usize = 0;
+        while (di < state.max_entities) : (di += 1) {
+            const e = &st.entities[di];
+            if (!e.alive) continue;
+            drawCube(e, st.isSelected(di), u.theme.accent);
+        }
     }
 
     // --- Restore 2D for UI overlay text ---
@@ -809,33 +741,75 @@ pub fn frame(a: *app.App) void {
     sgl.loadIdentity();
     if (a.pip_alpha.id != 0) sgl.loadPipeline(a.pip_alpha);
 
-    // Labels track cube tops (not clickable). Basis project matches GPU lookat+persp.
-    for (ents, 0..) |e, i| {
-        const anchor = Vec3.add(e.pos, .{ .x = 0, .y = e.half + 6, .z = 0 });
-        if (worldToScreenBasis(anchor, cam, w, h)) |s| {
-            const sel = isSelected(st, i);
-            const col = if (sel) u.theme.accent else u.theme.text;
-            const tw = u.font.measure(e.name, 1.5).w;
-            u.drawText(s.x - tw * 0.5, s.y - 10, 1.5, col, e.name);
+    // Labels track cube tops (not clickable).
+    {
+        var li: usize = 0;
+        while (li < state.max_entities) : (li += 1) {
+            const e = &st.entities[li];
+            if (!e.alive) continue;
+            const anchor = Vec3{ .x = e.pos_x, .y = e.pos_y + e.halfScaled() + 6, .z = e.pos_z };
+            if (worldToScreenBasis(anchor, cam, w, h)) |s| {
+                const sel = st.isSelected(li);
+                const col = if (sel) u.theme.accent else u.theme.text;
+                const name = e.nameSlice();
+                const tw = u.font.measure(name, 1.5).w;
+                u.drawText(s.x - tw * 0.5, s.y - 10, 1.5, col, name);
+            }
         }
     }
 
     drawCompass(u, cam, w);
 
-    // HUD
-    u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — 3D orbit viewport");
-    u.drawText(16, 40, 1.5, u.theme.text_dim, "MMB drag orbit  |  Shift+MMB strafe  |  Space+LMB pan  |  wheel dolly");
-    u.drawText(16, 58, 1.5, u.theme.text_dim, "WASD+QE fly  ·  Ctrl+A all/none  ·  F/. frame  ·  7/1/3  ·  Ctrl/Shift multi");
+    // Editor panels (scene tree / inspector / console) on top of the viewport.
+    editor.draw(a);
 
+    // Delete selection (Del) when not typing in a field.
+    if (u.focus.isNone() and !u.palette_open and a.input.keyPressed(.delete) and st.selectionCount() > 0) {
+        const n = st.deleteSelected();
+        var dbuf: [48]u8 = undefined;
+        u.log(std.fmt.bufPrint(&dbuf, "deleted {d} entit(y/ies)", .{n}) catch "deleted");
+        u.toast("Deleted selection", .err, 1.2);
+    }
+
+    // Select — LMB on mesh only, after UI so panel clicks don't pick through.
+    // Ctrl/Shift = multi-select toggle; plain click replaces.
+    if (a.input.mousePressed(.left) and !a.input.keyDown(.space) and !u.palette_open and !st.pointerOverEditorUi(a.input.mouse_x, a.input.mouse_y) and !u.any_hot) {
+        const ray = screenToWorldRayBasis(a.input.mouse_x, a.input.mouse_y, w, h, cam);
+        const hit = pickEntity(st, ray);
+        const multi = a.input.ctrl or a.input.shift;
+        if (hit < 0) {
+            if (!multi) st.clearSelection();
+        } else {
+            const iu: usize = @intCast(hit);
+            if (multi) {
+                const on = !st.isSelected(iu);
+                st.setSelected(iu, on);
+                if (on) st.canvas_sel_primary = hit else if (st.canvas_sel_primary == hit) {
+                    st.canvas_sel_primary = -1;
+                    var bi: usize = 0;
+                    while (bi < state.max_entities) : (bi += 1) {
+                        if (st.isSelected(bi)) {
+                            st.canvas_sel_primary = @intCast(bi);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                st.clearSelection();
+                st.setSelected(iu, true);
+                st.canvas_sel_primary = hit;
+            }
+            u.log("select");
+        }
+    }
+
+    // Compact HUD above console strip
     var buf: [96]u8 = undefined;
-    const nsel = @popCount(st.canvas_sel_mask);
-    const msg = std.fmt.bufPrint(&buf, "yaw {d:.2}  pitch {d:.2}  dist {d:.0}  sel {d} (primary {d})", .{
-        st.canvas_yaw,
-        st.canvas_pitch,
-        st.canvas_dist,
+    const nsel = st.selectionCount();
+    const msg = std.fmt.bufPrint(&buf, "canvas  sel {d}  entities {d}  ·  MMB orbit  WASD fly  Del delete  Ctrl+P", .{
         nsel,
-        st.canvas_sel_primary,
+        st.aliveCount(),
     }) catch "";
-    u.drawText(16, h - 40, 1.5, u.theme.text_dim, msg);
-    u.drawText(16, h - 22, 1.5, u.theme.text_dim, "Ctrl+P palette  |  type scene");
+    const hud_y = if (st.editor_console_open) h - st.console_h - 28 else h - 18;
+    u.drawText(16, hud_y, 1.4, u.theme.text_dim, msg);
 }

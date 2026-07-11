@@ -83,9 +83,10 @@ pub fn slider(ui: anytype, opts: anytype) bool {
         }, ui.theme.slider_fill);
     }
 
-    // Value centered on the bar (over the fill)
+    // Value centered on the bar (over the fill). Optional display_override e.g. "-" for multi-edit mixed.
     var buf: [32]u8 = undefined;
-    const val_s = std.fmt.bufPrint(&buf, "{d:.2}", .{opts.value.*}) catch "?";
+    const override: ?[]const u8 = if (@hasField(@TypeOf(opts), "display_override")) opts.display_override else null;
+    const val_s: []const u8 = if (override) |o| o else (std.fmt.bufPrint(&buf, "{d:.2}", .{opts.value.*}) catch "?");
     const vm = ui.font.measure(val_s, size);
     const tx = bar.x + (bar.w - vm.w) * 0.5;
     const ty = bar.y + (bar.h - ui.font.lineHeight(size)) * 0.5;

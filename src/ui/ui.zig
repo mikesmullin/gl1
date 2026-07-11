@@ -741,6 +741,8 @@ pub const Ui = struct {
         id: []const u8,
         label: []const u8,
         value: *f32,
+        /// When set (e.g. "-"), drawn instead of the numeric value (multi-edit mixed).
+        display_override: ?[]const u8 = null,
         min: f32 = 0,
         max: f32 = 1,
         w: f32 = 200,

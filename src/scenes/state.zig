@@ -35,6 +35,41 @@ pub const DeskWin = struct {
     h: f32 = 220,
 };
 
+/// Max simultaneous scene entities (selection mask is u32).
+pub const max_entities: usize = 32;
+
+/// Runtime scene object — edited in the canvas/editor inspector (in-memory only).
+pub const WorldEntity = struct {
+    alive: bool = false,
+    name: [32]u8 = undefined,
+    name_len: usize = 0,
+    pos_x: f32 = 0,
+    pos_y: f32 = 0,
+    pos_z: f32 = 0,
+    /// Euler degrees (Y used for cube yaw in the viewport).
+    rot_x: f32 = 0,
+    rot_y: f32 = 0,
+    rot_z: f32 = 0,
+    /// Uniform scale applied to base half-extent.
+    scale: f32 = 1,
+    half: f32 = 14,
+    color: [4]f32 = .{ 0.5, 0.5, 0.5, 1 },
+
+    pub fn setName(self: *WorldEntity, s: []const u8) void {
+        const n = @min(s.len, self.name.len);
+        @memcpy(self.name[0..n], s[0..n]);
+        self.name_len = n;
+    }
+
+    pub fn nameSlice(self: *const WorldEntity) []const u8 {
+        return self.name[0..self.name_len];
+    }
+
+    pub fn halfScaled(self: *const WorldEntity) f32 {
+        return self.half * @max(0.05, self.scale);
+    }
+};
+
 pub const State = struct {
     selected: usize = 0,
     checked: bool = true,
@@ -82,8 +117,8 @@ pub const State = struct {
     notes: [512]u8 = undefined,
     notes_len: usize = 0,
     show_console: bool = true,
-    console_h: f32 = 120,
-    /// Canvas scene — orbit camera (Blender-ish mini viewport).
+    console_h: f32 = 140,
+    /// Canvas / editor — orbit camera (Blender-ish mini viewport).
     canvas_tx: f32 = 0,
     canvas_ty: f32 = 0,
     canvas_tz: f32 = 0,
@@ -99,6 +134,26 @@ pub const State = struct {
     canvas_sel_mask: u32 = 0,
     canvas_sel_primary: i32 = -1,
     canvas_frame: @import("../anim.zig").Parallel = .{},
+
+    /// Live scene graph (editable from editor panels + viewport).
+    entities: [max_entities]WorldEntity = undefined,
+    next_entity_serial: u32 = 1,
+
+    /// Editor chrome (floating panels over the canvas).
+    editor_tree_open: bool = true,
+    editor_inspector_open: bool = true,
+    editor_console_open: bool = true,
+    editor_tree_w: f32 = 220,
+    editor_insp_w: f32 = 280,
+    /// Last selection mask we synced name edit buffer from.
+    editor_name_sync_mask: u32 = 0xFFFFFFFF,
+    /// Scratch buffer for multi-edit name field.
+    editor_name_buf: [32]u8 = undefined,
+    editor_name_len: usize = 0,
+    /// Previous-frame hit rects so 3D pick ignores UI (set while drawing panels).
+    editor_hit_tree: DeskWin = .{ .open = true, .x = 8, .y = 8, .w = 220, .h = 400 },
+    editor_hit_insp: DeskWin = .{ .open = true, .x = 800, .y = 8, .w = 280, .h = 400 },
+    editor_hit_console: DeskWin = .{ .open = true, .x = 8, .y = 560, .w = 1000, .h = 140 },
 
     /// Panels scene — desktop windows (positions remembered while open/closed).
     desk_a: DeskWin = .{ .open = true, .x = 40, .y = 40, .w = 300, .h = 220 },
@@ -123,5 +178,132 @@ pub const State = struct {
         ;
         @memcpy(self.notes[0..note.len], note);
         self.notes_len = note.len;
+        self.initWorld();
+    }
+
+    pub fn initWorld(self: *State) void {
+        self.entities = std.mem.zeroes([max_entities]WorldEntity);
+        self.next_entity_serial = 1;
+        const seed = [_]struct {
+            name: []const u8,
+            x: f32,
+            y: f32,
+            z: f32,
+            half: f32,
+            color: [4]f32,
+        }{
+            .{ .name = "Hero", .x = 120, .y = 14, .z = -40, .half = 16, .color = .{ 0.3, 0.85, 0.4, 1 } },
+            .{ .name = "Slime", .x = -80, .y = 18, .z = 90, .half = 18, .color = .{ 0.3, 0.5, 0.95, 1 } },
+            .{ .name = "Torch", .x = 200, .y = 12, .z = 140, .half = 12, .color = .{ 0.95, 0.8, 0.2, 1 } },
+            .{ .name = "Crystal", .x = -160, .y = 22, .z = -100, .half = 20, .color = .{ 0.75, 0.4, 0.9, 1 } },
+            .{ .name = "Crate", .x = 40, .y = 16, .z = 60, .half = 14, .color = .{ 0.9, 0.55, 0.2, 1 } },
+        };
+        for (seed, 0..) |s, i| {
+            self.entities[i].alive = true;
+            self.entities[i].setName(s.name);
+            self.entities[i].pos_x = s.x;
+            self.entities[i].pos_y = s.y;
+            self.entities[i].pos_z = s.z;
+            self.entities[i].half = s.half;
+            self.entities[i].color = s.color;
+            self.entities[i].scale = 1;
+        }
+        self.next_entity_serial = @intCast(seed.len + 1);
+        self.canvas_sel_mask = 0;
+        self.canvas_sel_primary = -1;
+    }
+
+    pub fn isSelected(self: *const State, i: usize) bool {
+        if (i >= max_entities) return false;
+        return (self.canvas_sel_mask & (@as(u32, 1) << @intCast(i))) != 0 and self.entities[i].alive;
+    }
+
+    pub fn setSelected(self: *State, i: usize, on: bool) void {
+        if (i >= max_entities) return;
+        const bit = @as(u32, 1) << @intCast(i);
+        if (on) self.canvas_sel_mask |= bit else self.canvas_sel_mask &= ~bit;
+    }
+
+    pub fn clearSelection(self: *State) void {
+        self.canvas_sel_mask = 0;
+        self.canvas_sel_primary = -1;
+    }
+
+    pub fn selectionCount(self: *const State) u32 {
+        var n: u32 = 0;
+        var i: usize = 0;
+        while (i < max_entities) : (i += 1) {
+            if (self.isSelected(i)) n += 1;
+        }
+        return n;
+    }
+
+    pub fn aliveCount(self: *const State) usize {
+        var n: usize = 0;
+        for (self.entities) |e| {
+            if (e.alive) n += 1;
+        }
+        return n;
+    }
+
+    pub fn addEntity(self: *State, name: []const u8, x: f32, y: f32, z: f32) ?usize {
+        var i: usize = 0;
+        while (i < max_entities) : (i += 1) {
+            if (!self.entities[i].alive) {
+                self.entities[i] = .{};
+                self.entities[i].alive = true;
+                self.entities[i].setName(name);
+                self.entities[i].pos_x = x;
+                self.entities[i].pos_y = y;
+                self.entities[i].pos_z = z;
+                self.entities[i].half = 14;
+                self.entities[i].scale = 1;
+                self.entities[i].color = .{ 0.55, 0.75, 0.55, 1 };
+                self.next_entity_serial +%= 1;
+                return i;
+            }
+        }
+        return null;
+    }
+
+    pub fn deleteSelected(self: *State) u32 {
+        var n: u32 = 0;
+        var i: usize = 0;
+        while (i < max_entities) : (i += 1) {
+            if (self.isSelected(i)) {
+                self.entities[i].alive = false;
+                self.entities[i].name_len = 0;
+                n += 1;
+            }
+        }
+        self.clearSelection();
+        return n;
+    }
+
+    pub fn selectAllAlive(self: *State) void {
+        var mask: u32 = 0;
+        var primary: i32 = -1;
+        var i: usize = 0;
+        while (i < max_entities) : (i += 1) {
+            if (self.entities[i].alive) {
+                mask |= @as(u32, 1) << @intCast(i);
+                if (primary < 0) primary = @intCast(i);
+            }
+        }
+        self.canvas_sel_mask = mask;
+        self.canvas_sel_primary = primary;
+    }
+
+    pub fn pointerOverEditorUi(self: *const State, mx: f32, my: f32) bool {
+        const hits = [_]DeskWin{ self.editor_hit_tree, self.editor_hit_insp, self.editor_hit_console };
+        for (hits) |hw| {
+            if (!hw.open) continue;
+            if (mx >= hw.x and mx < hw.x + hw.w and my >= hw.y and my < hw.y + hw.h) return true;
+        }
+        // Collapsed tree expand chip (top-left 20×20)
+        if (!self.editor_tree_open) {
+            if (mx >= 6 and mx < 28 and my >= 6 and my < 28) return true;
+        }
+        return false;
     }
 };
