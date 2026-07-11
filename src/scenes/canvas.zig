@@ -592,8 +592,9 @@ pub fn frame(a: *app.App) void {
             st.canvas_tz = pivot.z;
         }
         const sens: f32 = 0.005;
-        // Yaw around world Y — match Blender turntable (was inverted).
-        st.canvas_yaw += a.input.mouse_dx * sens;
+        // Horizontal (screen X / yaw): keep prior sense.
+        // Vertical (screen Y / pitch): inverted vs original so drag-up matches Blender.
+        st.canvas_yaw -= a.input.mouse_dx * sens;
         st.canvas_pitch += a.input.mouse_dy * sens;
         const lim: f32 = std.math.pi * 0.5 - 0.02;
         st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
