@@ -240,6 +240,7 @@ pub const Input = struct {
             .ESCAPE => .escape,
             .SPACE => .space,
             .ENTER => .enter,
+            .KP_ENTER => .enter,
             .TAB => .tab,
             .BACKSPACE => .backspace,
             .DELETE => .delete,

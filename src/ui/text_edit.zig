@@ -313,33 +313,66 @@ fn insertAt(buf: []u8, len: *usize, pos: usize, bytes: []const u8) usize {
     return n;
 }
 
-/// Delete selection(s) or nothing. Returns true if buffer changed.
-pub fn deleteSelections(edit: *Edit, buf: []u8, len: *usize) bool {
-    // Process from end so earlier indices stay valid.
-    var changed = false;
-    // Sort carets by lo descending
-    var order: [MaxCarets]usize = undefined;
+/// After inserting `n` bytes at `pos`, shift every caret/anchor that was strictly after `pos`.
+fn bumpCaretsAfterInsert(edit: *Edit, pos: usize, n: usize, except: usize) void {
+    var j: usize = 0;
+    while (j < edit.caret_ct) : (j += 1) {
+        if (j == except) continue;
+        var r = &edit.carets[j];
+        if (r.caret > pos) r.caret += n;
+        if (r.anchor > pos) r.anchor += n;
+    }
+}
+
+/// After deleting [lo,hi), shift carets past the hole leftward.
+fn bumpCaretsAfterDelete(edit: *Edit, lo: usize, hi: usize, except: usize) void {
+    const n = hi - lo;
+    var j: usize = 0;
+    while (j < edit.caret_ct) : (j += 1) {
+        if (j == except) continue;
+        var r = &edit.carets[j];
+        if (r.caret >= hi) r.caret -= n else if (r.caret > lo) r.caret = lo;
+        if (r.anchor >= hi) r.anchor -= n else if (r.anchor > lo) r.anchor = lo;
+    }
+}
+
+fn sortCaretsBy(edit: *Edit, order: *[MaxCarets]usize, comptime by_lo: bool) void {
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) order[i] = i;
-    // simple bubble by lo desc
     var a: usize = 0;
     while (a < edit.caret_ct) : (a += 1) {
         var b: usize = a + 1;
         while (b < edit.caret_ct) : (b += 1) {
-            if (edit.carets[order[a]].lo() < edit.carets[order[b]].lo()) {
+            const va = if (by_lo) edit.carets[order[a]].lo() else edit.carets[order[a]].caret;
+            const vb = if (by_lo) edit.carets[order[b]].lo() else edit.carets[order[b]].caret;
+            // ascending (low index first)
+            if (va > vb) {
                 const t = order[a];
                 order[a] = order[b];
                 order[b] = t;
             }
         }
     }
-    i = 0;
-    while (i < edit.caret_ct) : (i += 1) {
-        const r = &edit.carets[order[i]];
+}
+
+/// Delete selection(s). Process low→high with caret fixups so multi-caret stays consistent.
+pub fn deleteSelections(edit: *Edit, buf: []u8, len: *usize) bool {
+    var changed = false;
+    var order: [MaxCarets]usize = undefined;
+    // High→low so earlier ranges stay valid without fixups on later deletes... 
+    // actually use high→low delete + fix remaining carets via bumpCaretsAfterDelete for others.
+    sortCaretsBy(edit, &order, true);
+    // reverse to high-first
+    var i: usize = edit.caret_ct;
+    while (i > 0) {
+        i -= 1;
+        const idx = order[i];
+        const r = &edit.carets[idx];
         if (r.hasSel()) {
             const lo = r.lo();
             const hi = r.hi();
             deleteRange(buf, len, lo, hi);
+            bumpCaretsAfterDelete(edit, lo, hi, idx);
             r.caret = lo;
             r.anchor = lo;
             changed = true;
@@ -349,95 +382,172 @@ pub fn deleteSelections(edit: *Edit, buf: []u8, len: *usize) bool {
     return changed;
 }
 
+/// Insert `bytes` at every caret. Process high→low and bump other carets when needed
+/// so simultaneous multi-caret typing stays in order (not reversed).
 pub fn insertText(edit: *Edit, buf: []u8, len: *usize, bytes: []const u8) bool {
-    _ = deleteSelections(edit, buf, len);
-    // Insert at each caret from end
+    var changed = deleteSelections(edit, buf, len);
+    if (bytes.len == 0) return changed;
+
     var order: [MaxCarets]usize = undefined;
-    var i: usize = 0;
-    while (i < edit.caret_ct) : (i += 1) order[i] = i;
-    var a: usize = 0;
-    while (a < edit.caret_ct) : (a += 1) {
-        var b: usize = a + 1;
-        while (b < edit.caret_ct) : (b += 1) {
-            if (edit.carets[order[a]].caret < edit.carets[order[b]].caret) {
-                const t = order[a];
-                order[a] = order[b];
-                order[b] = t;
-            }
-        }
-    }
-    var changed = false;
-    i = 0;
-    while (i < edit.caret_ct) : (i += 1) {
-        const r = &edit.carets[order[i]];
-        const n = insertAt(buf, len, r.caret, bytes);
+    sortCaretsBy(edit, &order, false);
+    // High caret first so earlier positions stay stable; bump higher carets on each insert.
+    var i: usize = edit.caret_ct;
+    while (i > 0) {
+        i -= 1;
+        const idx = order[i];
+        const r = &edit.carets[idx];
+        const pos = r.caret;
+        const n = insertAt(buf, len, pos, bytes);
         if (n > 0) {
-            r.caret += n;
+            bumpCaretsAfterInsert(edit, pos, n, idx);
+            r.caret = pos + n;
             r.anchor = r.caret;
             changed = true;
         }
     }
+    edit.clampAll(len.*);
     return changed;
 }
 
 pub fn backspace(edit: *Edit, buf: []u8, len: *usize) bool {
     if (deleteSelections(edit, buf, len)) return true;
-    var changed = false;
-    // From end
     var order: [MaxCarets]usize = undefined;
-    var i: usize = 0;
-    while (i < edit.caret_ct) : (i += 1) order[i] = i;
-    var a: usize = 0;
-    while (a < edit.caret_ct) : (a += 1) {
-        var b: usize = a + 1;
-        while (b < edit.caret_ct) : (b += 1) {
-            if (edit.carets[order[a]].caret < edit.carets[order[b]].caret) {
-                const t = order[a];
-                order[a] = order[b];
-                order[b] = t;
-            }
-        }
-    }
-    i = 0;
-    while (i < edit.caret_ct) : (i += 1) {
-        const r = &edit.carets[order[i]];
+    sortCaretsBy(edit, &order, false);
+    var changed = false;
+    var i: usize = edit.caret_ct;
+    while (i > 0) {
+        i -= 1;
+        const idx = order[i];
+        const r = &edit.carets[idx];
         if (r.caret > 0) {
-            deleteRange(buf, len, r.caret - 1, r.caret);
-            r.caret -= 1;
-            r.anchor = r.caret;
+            const lo = r.caret - 1;
+            const hi = r.caret;
+            deleteRange(buf, len, lo, hi);
+            bumpCaretsAfterDelete(edit, lo, hi, idx);
+            r.caret = lo;
+            r.anchor = lo;
             changed = true;
         }
     }
+    edit.clampAll(len.*);
     return changed;
 }
 
 pub fn deleteForward(edit: *Edit, buf: []u8, len: *usize) bool {
     if (deleteSelections(edit, buf, len)) return true;
-    var changed = false;
     var order: [MaxCarets]usize = undefined;
-    var i: usize = 0;
-    while (i < edit.caret_ct) : (i += 1) order[i] = i;
-    var a: usize = 0;
-    while (a < edit.caret_ct) : (a += 1) {
-        var b: usize = a + 1;
-        while (b < edit.caret_ct) : (b += 1) {
-            if (edit.carets[order[a]].caret < edit.carets[order[b]].caret) {
-                const t = order[a];
-                order[a] = order[b];
-                order[b] = t;
-            }
-        }
-    }
-    i = 0;
-    while (i < edit.caret_ct) : (i += 1) {
-        const r = &edit.carets[order[i]];
+    sortCaretsBy(edit, &order, false);
+    var changed = false;
+    var i: usize = edit.caret_ct;
+    while (i > 0) {
+        i -= 1;
+        const idx = order[i];
+        const r = &edit.carets[idx];
         if (r.caret < len.*) {
-            deleteRange(buf, len, r.caret, r.caret + 1);
+            const lo = r.caret;
+            const hi = r.caret + 1;
+            deleteRange(buf, len, lo, hi);
+            bumpCaretsAfterDelete(edit, lo, hi, idx);
             r.anchor = r.caret;
             changed = true;
         }
     }
+    edit.clampAll(len.*);
     return changed;
+}
+
+/// Hard word-wrap so no line measures wider than `max_px`. Prefer breaks at spaces.
+/// Remaps carets approximately via an old→new index map.
+pub fn hardWrap(
+    edit: *Edit,
+    buf: []u8,
+    len: *usize,
+    font: *const Font,
+    size: f32,
+    max_px: f32,
+) bool {
+    if (max_px < 16 or len.* == 0) return false;
+    const old_len = len.*;
+    if (old_len > MaxSnap) return false;
+
+    var out: [MaxSnap]u8 = undefined;
+    var map: [MaxSnap + 1]usize = undefined;
+    // Default identity so any unvisited index stays safe.
+    {
+        var mi: usize = 0;
+        while (mi <= old_len) : (mi += 1) map[mi] = mi;
+    }
+    var o: usize = 0;
+    var i: usize = 0;
+
+    while (i < old_len) {
+        const para_end = lineEnd(buf[0..old_len], i); // up to (not including) existing \n
+        var line_start = i;
+        while (line_start < para_end) {
+            var last_good: usize = line_start;
+            var last_space: ?usize = null;
+            var j = line_start;
+            while (j < para_end) : (j += 1) {
+                if (buf[j] == ' ') last_space = j;
+                const w = font.measure(buf[line_start .. j + 1], size).w;
+                if (w <= max_px) {
+                    last_good = j + 1;
+                } else {
+                    break;
+                }
+            }
+            var cut = if (j >= para_end) para_end else (last_space orelse last_good);
+            if (cut <= line_start) cut = @min(line_start + 1, para_end);
+
+            // copy [line_start, cut)
+            const n = cut - line_start;
+            if (o + n > out.len) return false;
+            @memcpy(out[o .. o + n], buf[line_start..cut]);
+            var m = line_start;
+            while (m < cut) : (m += 1) map[m] = o + (m - line_start);
+            o += n;
+
+            line_start = cut;
+            // drop a following space (replaced by wrap)
+            if (line_start < para_end and buf[line_start] == ' ') {
+                map[line_start] = o;
+                line_start += 1;
+            }
+            if (line_start < para_end) {
+                if (o >= out.len) return false;
+                out[o] = '\n';
+                o += 1;
+            }
+        }
+        map[para_end] = o;
+        if (para_end < old_len and buf[para_end] == '\n') {
+            if (o >= out.len) return false;
+            out[o] = '\n';
+            map[para_end] = o;
+            o += 1;
+            i = para_end + 1;
+            map[i] = o;
+        } else {
+            i = para_end;
+            break;
+        }
+    }
+    map[old_len] = o;
+
+    if (o == old_len and std.mem.eql(u8, buf[0..old_len], out[0..o])) return false;
+
+    const copy_n = @min(o, buf.len);
+    @memcpy(buf[0..copy_n], out[0..copy_n]);
+    len.* = copy_n;
+
+    var c: usize = 0;
+    while (c < edit.caret_ct) : (c += 1) {
+        const r = &edit.carets[c];
+        r.caret = map[@min(r.caret, old_len)];
+        r.anchor = map[@min(r.anchor, old_len)];
+    }
+    edit.clampAll(len.*);
+    return true;
 }
 
 // --- navigation -------------------------------------------------------------
@@ -691,12 +801,16 @@ fn copyText(edit: *Edit, text: []const u8, multiline: bool) []const u8 {
 }
 
 /// Handle keyboard for an edit session. Only call when field is focused.
+/// `wrap_px` > 0 enables hard word-wrap to that content width (multi-line only).
 pub fn handleKeys(
     edit: *Edit,
     buf: []u8,
     len: *usize,
     input: *Input,
     multiline: bool,
+    wrap_px: f32,
+    font: ?*const Font,
+    font_size: f32,
 ) bool {
     const text = buf[0..len.*];
     var changed = false;
@@ -806,24 +920,37 @@ pub fn handleKeys(
         ctrlD(edit, buf[0..len.*]);
         edit.coalesce_typing = false;
     }
+    // Enter → hard line break at every caret (including mid-line)
     if (multiline and input.keyPressed(.enter)) {
         edit.beforeMutate(buf, len.*, false);
         changed = insertText(edit, buf, len, "\n") or changed;
         edit.coalesce_typing = false;
+        edit.ctrl_d_active = false;
     }
 
     // Typed chars (Ctrl chars never reach text[] thanks to input filter)
     if (!ctrl and input.text_len > 0) {
-        edit.beforeMutate(buf, len.*, true);
-        changed = insertText(edit, buf, len, input.text[0..input.text_len]) or changed;
+        // Filter out any accidental control bytes; allow printable only
+        var tmp: [32]u8 = undefined;
+        var tn: usize = 0;
+        for (input.text[0..input.text_len]) |ch| {
+            if (ch >= 32 and ch < 127 and tn < tmp.len) {
+                tmp[tn] = ch;
+                tn += 1;
+            }
+        }
+        if (tn > 0) {
+            edit.beforeMutate(buf, len.*, true);
+            changed = insertText(edit, buf, len, tmp[0..tn]) or changed;
+        }
     }
     if (input.paste_len > 0) {
         var tmp: [512]u8 = undefined;
         var n: usize = 0;
         for (input.paste[0..input.paste_len]) |ch| {
-            if (ch == '\n') {
+            if (ch == '\n' or ch == '\r') {
                 if (multiline and n < tmp.len) {
-                    tmp[n] = ch;
+                    tmp[n] = '\n';
                     n += 1;
                 }
             } else if (ch >= 32 and ch < 127 and n < tmp.len) {
@@ -837,6 +964,13 @@ pub fn handleKeys(
         }
         input.paste_len = 0;
         edit.coalesce_typing = false;
+    }
+
+    // Hard wrap after mutations (multi-line + width known)
+    if (changed and multiline and wrap_px > 0) {
+        if (font) |f| {
+            _ = hardWrap(edit, buf, len, f, font_size, wrap_px);
+        }
     }
 
     edit.clampAll(len.*);
@@ -951,4 +1085,55 @@ pub fn handleMouseDrag(
 
 pub fn handleMouseUp(edit: *Edit) void {
     edit.dragging = false;
+}
+
+// --- tests ------------------------------------------------------------------
+
+test "insertText mid-line newline" {
+    var buf: [64]u8 = undefined;
+    const src = "hello world";
+    @memcpy(buf[0..src.len], src);
+    var len: usize = src.len;
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .caret = 5, .anchor = 5 }; // after "hello"
+    try std.testing.expect(insertText(&edit, &buf, &len, "\n"));
+    try std.testing.expectEqualStrings("hello\n world", buf[0..len]);
+    try std.testing.expectEqual(@as(usize, 6), edit.carets[0].caret);
+}
+
+test "multi-caret insert not reversed" {
+    // Simulate Ctrl+D on two "haha" occurrences, then type "honeybee"
+    var buf: [128]u8 = undefined;
+    const src = "say haha then haha end";
+    @memcpy(buf[0..src.len], src);
+    var len: usize = src.len;
+    var edit: Edit = .{};
+    // "haha" at 4..8 and 14..18
+    edit.carets[0] = .{ .anchor = 4, .caret = 8 };
+    edit.carets[1] = .{ .anchor = 14, .caret = 18 };
+    edit.caret_ct = 2;
+
+    // Type one char at a time (as key events do)
+    for ("honeybee") |ch| {
+        const s = [_]u8{ch};
+        try std.testing.expect(insertText(&edit, &buf, &len, &s));
+    }
+    try std.testing.expectEqualStrings("say honeybee then honeybee end", buf[0..len]);
+    try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
+    // Both carets after their respective inserts
+    try std.testing.expectEqual(@as(usize, 12), edit.carets[0].caret);
+    try std.testing.expectEqual(@as(usize, 26), edit.carets[1].caret);
+}
+
+test "multi-caret whole-string insert" {
+    var buf: [128]u8 = undefined;
+    const src = "aa X bb X cc";
+    @memcpy(buf[0..src.len], src);
+    var len: usize = src.len;
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .anchor = 3, .caret = 4 }; // first X
+    edit.carets[1] = .{ .anchor = 8, .caret = 9 }; // second X
+    edit.caret_ct = 2;
+    try std.testing.expect(insertText(&edit, &buf, &len, "YY"));
+    try std.testing.expectEqualStrings("aa YY bb YY cc", buf[0..len]);
 }

@@ -46,7 +46,18 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
 
     var changed = false;
     if (focused) {
-        changed = te.handleKeys(ed, opts.buf, opts.len, ui.input, opts.multiline);
+        // Content width inside padding (6px left + ~6px right).
+        const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
+        changed = te.handleKeys(
+            ed,
+            opts.buf,
+            opts.len,
+            ui.input,
+            opts.multiline,
+            wrap_px,
+            ui.font,
+            opts.size,
+        );
     }
 
     ui.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
