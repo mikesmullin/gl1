@@ -301,9 +301,20 @@ pub fn frame(a: *app.App) void {
                 else => u.label(.{ .text = "Audio settings placeholder" }),
             }
         } else if (eq(tab, "TextInput")) {
-            u.label(.{ .text = "Text input (Ctrl+digit = scenes; ! types fine)" });
+            u.label(.{ .text = "Single-line text input" });
             _ = u.textInput(.{ .id = "sb_ti", .label = "Value", .buf = &st.text_buf, .len = &st.text_len, .w = 280 });
             u.label(.{ .text = st.text_buf[0..st.text_len], .color = u.theme.accent });
+            u.separator();
+            u.label(.{ .text = "Multi-line text area (soft wrap, multi-caret, resize grip)" });
+            _ = u.textArea(.{
+                .id = "sb_notes",
+                .label = "Notes",
+                .buf = &st.notes,
+                .len = &st.notes_len,
+                .w = @min(320, dw - 48),
+                .rows = 3,
+                .max_height = 160,
+            });
         } else if (eq(tab, "Theme")) {
             u.label(.{ .text = "Theme selection" });
             u.label(.{ .text = "Choose a palette (applies app-wide):", .color = u.theme.text_dim });
