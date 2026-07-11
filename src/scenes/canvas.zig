@@ -630,7 +630,9 @@ pub fn frame(a: *app.App) void {
         if (a.input.keyDown(.d)) move = Vec3.add(move, cam.right);
         if (a.input.keyDown(.a)) move = Vec3.sub(move, cam.right);
         // Vertical: world up so flying feels level (not camera-tilt dependent).
-        if (a.input.keyDown(.e) or a.input.keyDown(.space)) move = Vec3.add(move, .{ .x = 0, .y = 1, .z = 0 });
+        // Space = up unless Space+LMB pan is active.
+        if (a.input.keyDown(.e) or (a.input.keyDown(.space) and !a.input.mouseDown(.left)))
+            move = Vec3.add(move, .{ .x = 0, .y = 1, .z = 0 });
         if (a.input.keyDown(.q)) move = Vec3.add(move, .{ .x = 0, .y = -1, .z = 0 });
         if (Vec3.length(move) > 1e-4) {
             move = Vec3.scale(Vec3.norm(move), step);
