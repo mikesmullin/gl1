@@ -143,6 +143,8 @@ pub const State = struct {
     editor_tree_open: bool = true,
     editor_inspector_open: bool = true,
     editor_console_open: bool = true,
+    /// Last frame had a non-empty selection (for auto-expand inspector).
+    editor_had_selection: bool = false,
     editor_tree_w: f32 = 220,
     editor_insp_w: f32 = 280,
     /// Last selection mask we synced name edit buffer from.
@@ -300,10 +302,7 @@ pub const State = struct {
             if (!hw.open) continue;
             if (mx >= hw.x and mx < hw.x + hw.w and my >= hw.y and my < hw.y + hw.h) return true;
         }
-        // Collapsed tree expand chip (top-left 20×20)
-        if (!self.editor_tree_open) {
-            if (mx >= 6 and mx < 28 and my >= 6 and my < 28) return true;
-        }
+        // Collapsed expand chips (tree top-left / inspector top-right) live in hit rects when open flags set.
         return false;
     }
 };
