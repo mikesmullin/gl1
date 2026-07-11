@@ -1083,6 +1083,35 @@ pub fn handleMouseDrag(
         edit.carets[0].caret = pos;
         return;
     }
+    // Double-click drag: expand by whole words from the original click seed.
+    // (Without this, every drag frame would set caret to the mid-word click pos and
+    // shrink a full-word selection to "start..click", e.g. "hams" of "hamster".)
+    if (edit.click_count == 2) {
+        const seed = edit.last_click_pos;
+        const a = wordAt(text, seed);
+        const b = wordAt(text, pos);
+        const start = @min(a.start, b.start);
+        const end = @max(a.end, b.end);
+        edit.carets[0] = .{ .anchor = start, .caret = end };
+        edit.caret_ct = 1;
+        return;
+    }
+    // Triple-click drag: expand by whole lines.
+    if (edit.click_count >= 3 and multiline) {
+        const seed = edit.last_click_pos;
+        const ls0 = lineStart(text, seed);
+        var le0 = lineEnd(text, seed);
+        if (le0 < text.len and text[le0] == '\n') le0 += 1;
+        const ls1 = lineStart(text, pos);
+        var le1 = lineEnd(text, pos);
+        if (le1 < text.len and text[le1] == '\n') le1 += 1;
+        edit.carets[0] = .{
+            .anchor = @min(ls0, ls1),
+            .caret = @max(le0, le1),
+        };
+        edit.caret_ct = 1;
+        return;
+    }
     edit.carets[0].caret = pos;
 }
 
