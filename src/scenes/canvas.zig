@@ -349,13 +349,19 @@ pub fn frame(a: *app.App) void {
         u.eatScroll();
     }
 
-    // Orbit — middle mouse drag
+    // Orbit — middle mouse drag (turntable).
+    // Natural “grab the view”: drag right → orbit right; drag up → tilt up
+    // (previous signs felt inverted). Pitch is clamped just inside ±90° so we
+    // never hit true gimbal lock; yaw is free → full 360° around world Y.
     if (a.input.mousePressed(.middle)) st.canvas_orbiting = true;
     if (a.input.mouseReleased(.middle)) st.canvas_orbiting = false;
     if (st.canvas_orbiting and a.input.mouseDown(.middle)) {
-        st.canvas_yaw += a.input.mouse_dx * 0.005;
-        st.canvas_pitch -= a.input.mouse_dy * 0.005;
-        st.canvas_pitch = std.math.clamp(st.canvas_pitch, -1.52, 1.52);
+        const sens: f32 = 0.005;
+        st.canvas_yaw -= a.input.mouse_dx * sens;
+        st.canvas_pitch += a.input.mouse_dy * sens;
+        // Keep a tiny margin from ±π/2 so world-up lookat stays stable.
+        const lim: f32 = std.math.pi * 0.5 - 0.02;
+        st.canvas_pitch = std.math.clamp(st.canvas_pitch, -lim, lim);
     }
 
     // Pan — Space + LMB (move look target in camera plane)
@@ -395,6 +401,8 @@ pub fn frame(a: *app.App) void {
     sgl.perspective(cam.fov_y * 180.0 / std.math.pi, aspect, 1.0, 8000.0);
     sgl.matrixModeModelview();
     sgl.loadIdentity();
+    // Always pass world up into lookat (turntable) — matches buildCam and
+    // prevents the view from rolling so the green +Y axis points “down”.
     sgl.lookat(
         cam.eye.x,
         cam.eye.y,
@@ -402,9 +410,9 @@ pub fn frame(a: *app.App) void {
         cam.target.x,
         cam.target.y,
         cam.target.z,
-        cam.up.x,
-        cam.up.y,
-        cam.up.z,
+        0,
+        1,
+        0,
     );
 
     drawGrid(400, 40);
