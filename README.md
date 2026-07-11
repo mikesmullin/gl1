@@ -37,11 +37,10 @@ zig build
 
 | Input | Action |
 |-------|--------|
-| **Ctrl+0…8** | Switch scene |
-| **Ctrl+K** / **Ctrl+P** | Command palette |
+| **Ctrl+P** | Command palette (type `scene` → pick alphabetically) |
 | **Esc** | Close modal/palette → clear focus → quit |
 
-Digits and Shift+digit (e.g. `!`) are free for typing. Scene shortcuts require **Ctrl**.
+Digits stay free for typing. Switch scenes via **Ctrl+P** → `scene` → arrows / Enter.
 
 ## Project layout
 

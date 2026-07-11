@@ -26,8 +26,7 @@ const HELP =
     \\  canvas          pan/zoom 2D world grid
     \\
     \\keys:
-    \\  Ctrl+0..8       switch scenes
-    \\  Ctrl+K / Ctrl+P command palette
+    \\  Ctrl+P          command palette (type "scene" for scenes)
     \\  Esc             close modal/palette / clear focus / quit
     \\
 ;

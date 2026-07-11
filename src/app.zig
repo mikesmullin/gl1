@@ -100,12 +100,11 @@ fn loadFont() void {
 }
 
 fn trySceneHotkeys() void {
-    // Called once per frame (not per-event) so keyPressed edges stay coherent.
-    // Ctrl+digit / Ctrl+K only — bare digits and Shift+digit stay free for typing.
+    // Called once per frame so keyPressed edges stay coherent.
     if (!g.input.ctrl) return;
 
-    // Ctrl+K / Ctrl+P → command palette (works from any scene).
-    if (g.input.keyPressed(.k) or g.input.keyPressed(.p)) {
+    // Ctrl+P → command palette (scene switching is via palette filters).
+    if (g.input.keyPressed(.p)) {
         g.ui.palette_open = !g.ui.palette_open;
         if (g.ui.palette_open) {
             g.ui.palette_query_len = 0;
@@ -117,19 +116,7 @@ fn trySceneHotkeys() void {
         } else {
             g.ui.log("palette closed");
         }
-        return;
     }
-    if (g.ui.palette_open) return; // don't also switch scenes while filtering
-
-    if (g.input.keyPressed(.one)) g.scene = .triangle;
-    if (g.input.keyPressed(.two)) g.scene = .rects;
-    if (g.input.keyPressed(.three)) g.scene = .text;
-    if (g.input.keyPressed(.four)) g.scene = .widgets_basic;
-    if (g.input.keyPressed(.five)) g.scene = .panels;
-    if (g.input.keyPressed(.six)) g.scene = .layout;
-    if (g.input.keyPressed(.seven)) g.scene = .inspector;
-    if (g.input.keyPressed(.eight)) g.scene = .canvas;
-    if (g.input.keyPressed(.zero)) g.scene = .storybook;
 }
 
 export fn event(ev: [*c]const sapp.Event) void {

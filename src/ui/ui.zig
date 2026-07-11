@@ -6,11 +6,13 @@ const input_mod = @import("../input.zig");
 const font_mod = @import("../font.zig");
 const theme_mod = @import("theme.zig");
 const draw = @import("../draw.zig");
+const te = @import("text_edit.zig");
 
 pub const Theme = theme_mod.Theme;
 pub const Color = theme_mod.Color;
 pub const Input = input_mod.Input;
 pub const Font = font_mod.Font;
+pub const TextEdit = te.Edit;
 
 pub const Id = struct {
     a: u64 = 0,
@@ -64,6 +66,11 @@ pub const Ui = struct {
 
     /// Phase-8 command list (flushed by app after endFrame).
     cmds: draw.List = .{},
+    /// Drawn after `cmds` so menus/overlays sit above panels.
+    front: draw.List = .{},
+
+    /// Persistent text-edit state keyed by widget id hash.
+    edits: std.AutoHashMap(u64, te.Edit) = undefined,
 
     hot: Id = .{},
     active: Id = .{},
@@ -120,7 +127,7 @@ pub const Ui = struct {
     menu_open: Id = .{},
     menu_anchor: Rect = .{},
 
-    /// Command palette (Ctrl+K / Ctrl+P).
+    /// Command palette (Ctrl+P).
     palette_open: bool = false,
     palette_query: [64]u8 = undefined,
     palette_query_len: usize = 0,
@@ -148,6 +155,7 @@ pub const Ui = struct {
         self.allocator = allocator;
         self.scroll_y = std.AutoHashMap(u64, f32).init(allocator);
         self.text_bufs = std.AutoHashMap(u64, []u8).init(allocator);
+        self.edits = std.AutoHashMap(u64, te.Edit).init(allocator);
         self.inited = true;
     }
 
@@ -159,7 +167,17 @@ pub const Ui = struct {
         }
         self.text_bufs.deinit();
         self.scroll_y.deinit();
+        self.edits.deinit();
         self.inited = false;
+    }
+
+    fn editState(self: *Ui, key: u64) *te.Edit {
+        const gop = self.edits.getOrPut(key) catch {
+            // fallback static — shouldn't happen
+            unreachable;
+        };
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        return gop.value_ptr;
     }
 
     pub fn beginFrame(self: *Ui, input: *Input, font: *const Font, w: f32, h: f32, dt: f32, time: f64) void {
@@ -175,6 +193,7 @@ pub const Ui = struct {
         self.curr_count = 0;
         self.panel_scroll_depth = 0;
         self.cmds.clear();
+        self.front.clear();
         self.tooltip_set = false;
         self.tooltip_len = 0;
         self.consumed_escape = false;
@@ -228,7 +247,7 @@ pub const Ui = struct {
         self.prev_rects = self.curr_rects;
         self.prev_count = self.curr_count;
 
-        // Draw tooltip near cursor (after widgets).
+        // Tooltip / toasts on the front layer (above panels).
         if (self.tooltip_set and self.tooltip_len > 0) {
             const msg = self.tooltip_text[0..self.tooltip_len];
             const m = self.font.measure(msg, self.theme.font_size);
@@ -238,11 +257,10 @@ pub const Ui = struct {
             if (tx + m.w + pad * 2 > self.width) tx = self.width - m.w - pad * 2;
             if (ty + m.h + pad * 2 > self.height) ty = self.input.mouse_y - m.h - pad * 2 - 8;
             const tr = Rect{ .x = tx, .y = ty, .w = m.w + pad * 2, .h = m.h + pad * 2 };
-            self.drawRectBorder(tr, self.theme.tooltip_bg, self.theme.panel_border, 1);
-            self.drawText(tr.x + pad, tr.y + pad, self.theme.font_size, self.theme.text, msg);
+            self.drawRectBorderFront(tr, self.theme.tooltip_bg, self.theme.panel_border, 1);
+            self.drawTextFront(tr.x + pad, tr.y + pad, self.theme.font_size, self.theme.text, msg);
         }
 
-        // Draw toasts bottom-right.
         if (self.toast_count > 0) {
             var y = self.height - 16;
             var k: usize = self.toast_count;
@@ -262,8 +280,8 @@ pub const Ui = struct {
                     .warn => self.theme.warning,
                     .err => self.theme.danger,
                 };
-                self.drawRectBorder(tr, self.theme.toast_bg, accent, 2);
-                self.drawText(tr.x + pad, tr.y + pad, self.theme.font_size, self.theme.text, msg);
+                self.drawRectBorderFront(tr, self.theme.toast_bg, accent, 2);
+                self.drawTextFront(tr.x + pad, tr.y + pad, self.theme.font_size, self.theme.text, msg);
             }
         }
     }
@@ -410,6 +428,10 @@ pub const Ui = struct {
         self.cmds.rect(.{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }, color);
     }
 
+    pub fn drawRectFront(self: *Ui, r: Rect, color: Color) void {
+        self.front.rect(.{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }, color);
+    }
+
     pub fn drawRectBorder(self: *Ui, r: Rect, fill: Color, border: Color, thickness: f32) void {
         self.drawRect(r, border);
         const inner = Rect{
@@ -421,12 +443,28 @@ pub const Ui = struct {
         self.drawRect(inner, fill);
     }
 
+    pub fn drawRectBorderFront(self: *Ui, r: Rect, fill: Color, border: Color, thickness: f32) void {
+        self.drawRectFront(r, border);
+        const inner = Rect{
+            .x = r.x + thickness,
+            .y = r.y + thickness,
+            .w = @max(0, r.w - 2 * thickness),
+            .h = @max(0, r.h - 2 * thickness),
+        };
+        self.drawRectFront(inner, fill);
+    }
+
     pub fn drawText(self: *Ui, x: f32, y: f32, size: f32, color: Color, text: []const u8) void {
         self.cmds.text(x, y, size, color, text);
     }
 
+    pub fn drawTextFront(self: *Ui, x: f32, y: f32, size: f32, color: Color, text: []const u8) void {
+        self.front.text(x, y, size, color, text);
+    }
+
     pub fn flushDraw(self: *Ui) void {
         self.cmds.flushSgl(self.font);
+        self.front.flushSgl(self.font);
     }
 
     // --- Interaction --------------------------------------------------------
@@ -784,104 +822,166 @@ pub const Ui = struct {
     }) bool {
         const i = self.id(opts.id);
         const size = self.theme.font_size;
-        const r = self.alloc(opts.w, self.theme.row_h + 14);
+        const label_gap: f32 = 6;
+        const r = self.alloc(opts.w, self.theme.row_h + 14 + label_gap);
         self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const box = Rect{ .x = r.x, .y = r.y + 12, .w = opts.w, .h = self.theme.row_h };
-        const st = self.interact(i, box, false);
-        if (st.clicked) self.focus = i;
-
-        const focused = self.focus.eq(i);
-        self.drawRectBorder(box, self.theme.input_bg, if (focused) self.theme.accent else self.theme.panel_border, 1);
-
-        var changed = false;
-        if (focused) {
-            changed = self.appendFocusedText(opts.buf, opts.len) or changed;
-            if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
-                opts.len.* -= 1;
-                changed = true;
-            }
-        }
-        const shown = opts.buf[0..opts.len.*];
-        self.drawText(box.x + 6, box.y + 6, size, self.theme.text, shown);
-        if (focused and @mod(@as(i64, @intFromFloat(self.time * 2)), 2) == 0) {
-            const m = self.font.measure(shown, size);
-            self.drawRect(.{ .x = box.x + 6 + m.w, .y = box.y + 4, .w = 2, .h = box.h - 8 }, self.theme.text);
-        }
-        return changed;
-    }
-
-    fn appendFocusedText(self: *Ui, buf: []u8, len: *usize) bool {
-        var changed = false;
-        if (self.input.text_len > 0) {
-            const avail = buf.len - len.*;
-            const n = @min(avail, self.input.text_len);
-            @memcpy(buf[len.* .. len.* + n], self.input.text[0..n]);
-            len.* += n;
-            changed = n > 0;
-        }
-        // Ctrl+V / clipboard paste buffer
-        if (self.input.paste_len > 0) {
-            const pasted = self.input.paste[0..self.input.paste_len];
-            const avail = buf.len - len.*;
-            const n = @min(avail, pasted.len);
-            // Filter to printable ASCII + newline for multi-line.
-            var wrote: usize = 0;
-            for (pasted[0..n]) |ch| {
-                if (ch == '\n' or ch == '\t' or (ch >= 32 and ch < 127)) {
-                    if (len.* + wrote < buf.len) {
-                        buf[len.* + wrote] = if (ch == '\t') ' ' else ch;
-                        wrote += 1;
-                    }
-                }
-            }
-            len.* += wrote;
-            self.input.paste_len = 0;
-            changed = wrote > 0 or changed;
-        }
-        return changed;
+        const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = opts.w, .h = self.theme.row_h };
+        return self.textFieldCore(.{
+            .id_key = i.a,
+            .box = box,
+            .buf = opts.buf,
+            .len = opts.len,
+            .multiline = false,
+            .size = size,
+        });
     }
 
     /// Multi-line text area.
+    /// - `rows`: default height in text rows (like HTML textarea rows=N)
+    /// - `min_height`: pixel min (supersedes rows when set > 0)
+    /// - `max_height`: pixel max; overflow scrolls inside
     pub fn textArea(self: *Ui, opts: struct {
         id: []const u8,
         label: []const u8,
         buf: []u8,
         len: *usize,
         w: f32 = 280,
-        h: f32 = 100,
+        rows: u32 = 3,
+        min_height: f32 = 0,
+        max_height: f32 = 0,
+        h: f32 = 0, // legacy explicit height; if >0 used as min
     }) bool {
         const i = self.id(opts.id);
         const size = self.theme.font_size;
-        const r = self.alloc(opts.w, opts.h + 14);
+        const lh = self.font.lineHeight(size);
+        const label_gap: f32 = 6;
+        var body_h: f32 = @as(f32, @floatFromInt(opts.rows)) * lh + 12;
+        if (opts.h > 0) body_h = opts.h;
+        if (opts.min_height > 0) body_h = @max(body_h, opts.min_height);
+        const max_h = if (opts.max_height > 0) opts.max_height else body_h * 3;
+        // content height
+        const text = opts.buf[0..opts.len.*];
+        var nlines: usize = 1;
+        for (text) |ch| {
+            if (ch == '\n') nlines += 1;
+        }
+        const content_h = @as(f32, @floatFromInt(nlines)) * lh + 12;
+        const view_h = @min(max_h, @max(body_h, @min(content_h, max_h)));
+        const need_scroll = content_h > view_h;
+
+        const r = self.alloc(opts.w, view_h + 14 + label_gap);
         self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
-        const box = Rect{ .x = r.x, .y = r.y + 12, .w = opts.w, .h = opts.h };
+        const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = opts.w, .h = view_h };
+
+        // scroll offset for overflow
+        var scroll: f32 = 0;
+        if (need_scroll) {
+            const gop = self.scroll_y.getOrPut(i.a) catch null;
+            if (gop) |g| {
+                if (!g.found_existing) g.value_ptr.* = 0;
+                if (box.contains(self.input.mouse_x, self.input.mouse_y)) {
+                    g.value_ptr.* -= self.input.scroll_y * lh;
+                }
+                const max_scroll = content_h - view_h + 4;
+                if (g.value_ptr.* < 0) g.value_ptr.* = 0;
+                if (g.value_ptr.* > max_scroll) g.value_ptr.* = max_scroll;
+                scroll = g.value_ptr.*;
+            }
+        }
+
+        return self.textFieldCore(.{
+            .id_key = i.a,
+            .box = box,
+            .buf = opts.buf,
+            .len = opts.len,
+            .multiline = true,
+            .size = size,
+            .scroll_y = scroll,
+        });
+    }
+
+    fn textFieldCore(self: *Ui, opts: struct {
+        id_key: u64,
+        box: Rect,
+        buf: []u8,
+        len: *usize,
+        multiline: bool,
+        size: f32,
+        scroll_y: f32 = 0,
+    }) bool {
+        const box = opts.box;
+        const i = Id{ .a = opts.id_key, .b = 0 };
         const st = self.interact(i, box, false);
-        if (st.clicked) self.focus = i;
-        const focused = self.focus.eq(i);
+        const ed = self.editState(opts.id_key);
+        ed.clampAll(opts.len.*);
+
+        if (st.clicked or (self.input.mousePressed(.left) and box.contains(self.input.mouse_x, self.input.mouse_y))) {
+            self.focus = i;
+            const ox = box.x + 6;
+            const oy = box.y + 4 - opts.scroll_y;
+            te.handleMouseDown(
+                ed,
+                opts.buf[0..opts.len.*],
+                self.font,
+                opts.size,
+                ox,
+                oy,
+                self.input.mouse_x,
+                self.input.mouse_y,
+                opts.multiline,
+                self.time,
+                self.input.alt,
+                self.input.shift,
+            );
+        }
+        const focused = self.focus.a == opts.id_key;
+        if (focused and self.input.mouseDown(.left) and ed.dragging) {
+            const ox = box.x + 6;
+            const oy = box.y + 4 - opts.scroll_y;
+            te.handleMouseDrag(ed, opts.buf[0..opts.len.*], self.font, opts.size, ox, oy, self.input.mouse_x, self.input.mouse_y, opts.multiline);
+        }
+        if (self.input.mouseReleased(.left)) te.handleMouseUp(ed);
+
         self.drawRectBorder(box, self.theme.input_bg, if (focused) self.theme.accent else self.theme.panel_border, 1);
 
         var changed = false;
         if (focused) {
-            changed = self.appendFocusedText(opts.buf, opts.len) or changed;
-            if (self.input.keyPressed(.enter)) {
-                if (opts.len.* < opts.buf.len) {
-                    opts.buf[opts.len.*] = '\n';
-                    opts.len.* += 1;
-                    changed = true;
-                }
-            }
-            if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
-                opts.len.* -= 1;
-                changed = true;
-            }
+            changed = te.handleKeys(ed, opts.buf, opts.len, self.input, opts.multiline);
         }
 
         self.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
-        // Draw lines; caret at end of buffer (insert point).
         const origin_x = box.x + 6;
-        const origin_y = box.y + 4;
-        const lh = self.font.lineHeight(size);
+        const origin_y = box.y + 4 - opts.scroll_y;
+        const lh = self.font.lineHeight(opts.size);
         const text = opts.buf[0..opts.len.*];
+
+        // selection highlight(s)
+        var ci: usize = 0;
+        while (ci < ed.caret_ct) : (ci += 1) {
+            const rg = ed.carets[ci];
+            if (!rg.hasSel()) continue;
+            // draw per-line selection
+            var p = rg.lo();
+            const hi = rg.hi();
+            while (p < hi) {
+                const ls = te.lineStart(text, p);
+                const le = te.lineEnd(text, p);
+                const seg_lo = @max(p, ls);
+                const seg_hi = @min(hi, le);
+                const row = te.rowOf(text, seg_lo);
+                const pre = text[ls..seg_lo];
+                const mid = text[seg_lo..seg_hi];
+                const x0 = origin_x + self.font.measure(pre, opts.size).w;
+                const w = self.font.measure(mid, opts.size).w;
+                const y0 = origin_y + @as(f32, @floatFromInt(row)) * lh;
+                self.drawRect(.{ .x = x0, .y = y0, .w = @max(w, 2), .h = lh }, .{ 0.25, 0.45, 0.35, 0.55 });
+                if (seg_hi >= le and hi > le) {
+                    p = le + 1;
+                } else break;
+            }
+        }
+
+        // text lines
         var line_start: usize = 0;
         var li: usize = 0;
         var line_i: usize = 0;
@@ -889,26 +989,24 @@ pub const Ui = struct {
             if (li == text.len or text[li] == '\n') {
                 const line = text[line_start..li];
                 const ly = origin_y + @as(f32, @floatFromInt(line_i)) * lh;
-                self.drawText(origin_x, ly, size, self.theme.text, line);
+                self.drawText(origin_x, ly, opts.size, self.theme.text, line);
                 line_i += 1;
                 line_start = li + 1;
             }
         }
-        // Caret after last line's content (or start of empty last line).
-        var nlines: usize = 0;
-        var last_nl: ?usize = null;
-        for (text, 0..) |ch, idx| {
-            if (ch == '\n') {
-                nlines += 1;
-                last_nl = idx;
-            }
-        }
-        const last_start = if (last_nl) |n| n + 1 else 0;
-        const last_line = text[last_start..];
-        const caret_x = origin_x + self.font.measure(last_line, size).w;
-        const caret_y = origin_y + @as(f32, @floatFromInt(nlines)) * lh;
+
+        // carets
         if (focused and @mod(@as(i64, @intFromFloat(self.time * 2)), 2) == 0) {
-            self.drawRect(.{ .x = caret_x, .y = caret_y, .w = 2, .h = lh }, self.theme.text);
+            ci = 0;
+            while (ci < ed.caret_ct) : (ci += 1) {
+                const cpos = ed.carets[ci].caret;
+                const row = te.rowOf(text, cpos);
+                const ls = te.lineStart(text, cpos);
+                const pre = text[ls..cpos];
+                const cx = origin_x + self.font.measure(pre, opts.size).w;
+                const cy = origin_y + @as(f32, @floatFromInt(row)) * lh;
+                self.drawRect(.{ .x = cx, .y = cy, .w = 2, .h = lh }, self.theme.text);
+            }
         }
         self.cmds.push(.{ .scissor_pop = {} });
         return changed;
@@ -942,8 +1040,8 @@ pub const Ui = struct {
     }) ?usize {
         if (!self.palette_open) return null;
 
-        // Dim
-        self.drawRect(.{ .x = 0, .y = 0, .w = self.width, .h = self.height }, self.theme.overlay);
+        // Dim (front layer)
+        self.drawRectFront(.{ .x = 0, .y = 0, .w = self.width, .h = self.height }, self.theme.overlay);
 
         if (self.input.keyPressed(.escape)) {
             self.palette_open = false;
@@ -952,19 +1050,31 @@ pub const Ui = struct {
         }
 
         const pw: f32 = @min(520, self.width - 40);
-        const max_vis: usize = 10;
+        const max_vis: usize = 12;
         const row_h = self.theme.row_h;
-        const ph: f32 = row_h + 12 + @as(f32, @floatFromInt(@min(opts.items.len, max_vis))) * row_h + 16;
+        // Filter first so height fits matches
+        const q = self.palette_query[0..self.palette_query_len];
+        var matches: [64]usize = undefined;
+        var mct: usize = 0;
+        for (opts.items, 0..) |item, idx| {
+            if (q.len == 0 or containsIgnoreCaseUi(item, q)) {
+                if (mct < matches.len) {
+                    matches[mct] = idx;
+                    mct += 1;
+                }
+            }
+        }
+        // Keep stable order as provided (callers alphabetize).
+        const vis = @min(mct, max_vis);
+        const ph: f32 = row_h + 12 + @as(f32, @floatFromInt(@max(vis, 1))) * row_h + 16;
         const px = (self.width - pw) * 0.5;
         const py = self.height * 0.18;
         const box = Rect{ .x = px, .y = py, .w = pw, .h = ph };
-        self.drawRectBorder(box, self.theme.modal, self.theme.accent, 2);
-        self.drawText(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette");
+        self.drawRectBorderFront(box, self.theme.modal, self.theme.accent, 2);
+        self.drawTextFront(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette  (Ctrl+P)");
 
-        // Query field
         const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
-        self.drawRectBorder(qbox, self.theme.input_bg, self.theme.accent, 1);
-        // Always type into palette query while open
+        self.drawRectBorderFront(qbox, self.theme.input_bg, self.theme.accent, 1);
         if (self.input.text_len > 0) {
             const avail = self.palette_query.len - self.palette_query_len;
             const n = @min(avail, self.input.text_len);
@@ -976,26 +1086,14 @@ pub const Ui = struct {
             self.palette_query_len -= 1;
             self.palette_sel = 0;
         }
-        const q = self.palette_query[0..self.palette_query_len];
         if (q.len == 0) {
-            self.drawText(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter…");
+            self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter… e.g. scene");
         } else {
-            self.drawText(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
+            self.drawTextFront(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
         }
 
-        // Filter matches
-        var matches: [64]usize = undefined;
-        var mct: usize = 0;
-        for (opts.items, 0..) |item, idx| {
-            if (q.len == 0 or containsIgnoreCaseUi(item, q)) {
-                if (mct < matches.len) {
-                    matches[mct] = idx;
-                    mct += 1;
-                }
-            }
-        }
         if (mct == 0) {
-            self.drawText(box.x + 12, qbox.y + row_h + 12, self.theme.font_size, self.theme.text_dim, "No matches");
+            self.drawTextFront(box.x + 12, qbox.y + row_h + 12, self.theme.font_size, self.theme.text_dim, "No matches");
             return null;
         }
         if (self.palette_sel >= mct) self.palette_sel = mct - 1;
@@ -1009,7 +1107,6 @@ pub const Ui = struct {
 
         const list_y = qbox.y + row_h + 8;
         var result: ?usize = null;
-        const vis = @min(mct, max_vis);
         var vi: usize = 0;
         while (vi < vis) : (vi += 1) {
             const item_idx = matches[vi];
@@ -1020,9 +1117,9 @@ pub const Ui = struct {
                 .h = row_h,
             };
             const on = vi == self.palette_sel;
-            if (on) self.drawRect(ir, self.theme.selected);
-            self.drawText(ir.x + 8, ir.y + 6, self.theme.font_size, if (on) self.theme.accent else self.theme.text, opts.items[item_idx]);
-            const st = self.interact(self.id(opts.items[item_idx]), ir, false);
+            if (on) self.drawRectFront(ir, self.theme.selected);
+            self.drawTextFront(ir.x + 8, ir.y + 6, self.theme.font_size, if (on) self.theme.accent else self.theme.text, opts.items[item_idx]);
+            const st = self.interact(self.idFlat(opts.items[item_idx]), ir, false);
             if (st.clicked) {
                 result = item_idx;
             }
@@ -1366,7 +1463,7 @@ pub const Ui = struct {
 
         if (!self.menu_open.eq(i)) return null;
 
-        // Dropdown panel under the label.
+        // Dropdown on the front layer so it paints above panels.
         const item_h = self.theme.row_h - 2;
         const pad: f32 = 4;
         var max_w: f32 = r.w;
@@ -1375,7 +1472,7 @@ pub const Ui = struct {
         }
         const menu_h = item_h * @as(f32, @floatFromInt(opts.items.len)) + pad * 2;
         const menu = Rect{ .x = r.x, .y = r.y + r.h + 2, .w = max_w, .h = menu_h };
-        self.drawRectBorder(menu, self.theme.modal, self.theme.panel_border, 1);
+        self.drawRectBorderFront(menu, self.theme.modal, self.theme.panel_border, 1);
 
         var chosen: ?usize = null;
         for (opts.items, 0..) |item, idx| {
@@ -1389,8 +1486,8 @@ pub const Ui = struct {
             const iname = std.fmt.bufPrint(&idbuf, "menu:{s}:{d}", .{ opts.id, idx }) catch item;
             const iid = self.idFlat(iname);
             const ist = self.interact(iid, ir, false);
-            if (ist.hot) self.drawRect(ir, self.theme.button_hot);
-            self.drawText(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
+            if (ist.hot) self.drawRectFront(ir, self.theme.button_hot);
+            self.drawTextFront(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
             if (ist.clicked) chosen = idx;
         }
 
@@ -1622,7 +1719,7 @@ pub const Ui = struct {
         if (my + menu_h > self.height) my = self.height - menu_h - 4;
 
         const menu = Rect{ .x = mx, .y = my, .w = max_w, .h = menu_h };
-        self.drawRectBorder(menu, self.theme.modal, self.theme.panel_border, 1);
+        self.drawRectBorderFront(menu, self.theme.modal, self.theme.panel_border, 1);
 
         var clicked: ?usize = null;
         for (opts.items, 0..) |item, idx| {
@@ -1637,8 +1734,8 @@ pub const Ui = struct {
             const iname = std.fmt.bufPrint(&idbuf, "ctx:{s}:{d}", .{ opts.owner, idx }) catch item;
             const iid = self.idFlat(iname);
             const st = self.interact(iid, ir, false);
-            if (st.hot) self.drawRect(ir, self.theme.button_hot);
-            self.drawText(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
+            if (st.hot) self.drawRectFront(ir, self.theme.button_hot);
+            self.drawTextFront(ir.x + 8, ir.y + 5, self.theme.font_size, self.theme.text, item);
             if (st.clicked) clicked = idx;
         }
 
@@ -1675,23 +1772,17 @@ pub const Ui = struct {
     }) bool {
         const i = self.id(opts.id);
         const r = self.alloc(opts.w, self.theme.row_h);
-        const st = self.interact(i, r, false);
-        if (st.clicked) self.focus = i;
-        const focused = self.focus.eq(i);
-        self.drawRectBorder(r, self.theme.input_bg, if (focused) self.theme.accent else self.theme.panel_border, 1);
-
-        var changed = false;
-        if (focused) {
-            changed = self.appendFocusedText(opts.buf, opts.len) or changed;
-            if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
-                opts.len.* -= 1;
-                changed = true;
-            }
-        }
-        if (opts.len.* == 0 and !focused) {
+        const empty = opts.len.* == 0;
+        const changed = self.textFieldCore(.{
+            .id_key = i.a,
+            .box = r,
+            .buf = opts.buf,
+            .len = opts.len,
+            .multiline = false,
+            .size = self.theme.font_size,
+        });
+        if (empty and opts.len.* == 0 and self.focus.a != i.a) {
             self.drawText(r.x + 6, r.y + 6, self.theme.font_size, self.theme.text_dim, opts.placeholder);
-        } else {
-            self.drawText(r.x + 6, r.y + 6, self.theme.font_size, self.theme.text, opts.buf[0..opts.len.*]);
         }
         return changed;
     }
