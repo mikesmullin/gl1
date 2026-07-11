@@ -45,6 +45,162 @@ const Vec3 = struct {
     }
 };
 
+// --- Game9-inspired raycasting ---------------------------------------------
+// Game9 (`Camera.c`): Ray {pos, dir}, GetScreenToWorldRay via unproject
+// near/far through inverse(P*V), GetWorldToScreen via P*V + Y flip.
+// Intersection is separate (plane / rect / …). We add AABB for solid cubes.
+
+/// Game9-style ray: origin + normalized direction.
+const Ray = struct {
+    pos: Vec3 = .{},
+    dir: Vec3 = .{ .x = 0, .y = 0, .z = -1 },
+};
+
+/// Column-major 4×4 (OpenGL / sokol_gl layout).
+const Mat4 = struct {
+    /// m[col][row]
+    m: [4][4]f32 = .{
+        .{ 1, 0, 0, 0 },
+        .{ 0, 1, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    },
+
+    fn mul(a: Mat4, b: Mat4) Mat4 {
+        var r: Mat4 = .{};
+        var c: usize = 0;
+        while (c < 4) : (c += 1) {
+            var row: usize = 0;
+            while (row < 4) : (row += 1) {
+                r.m[c][row] =
+                    a.m[0][row] * b.m[c][0] +
+                    a.m[1][row] * b.m[c][1] +
+                    a.m[2][row] * b.m[c][2] +
+                    a.m[3][row] * b.m[c][3];
+            }
+        }
+        return r;
+    }
+
+    fn mulV4(a: Mat4, v: [4]f32) [4]f32 {
+        return .{
+            a.m[0][0] * v[0] + a.m[1][0] * v[1] + a.m[2][0] * v[2] + a.m[3][0] * v[3],
+            a.m[0][1] * v[0] + a.m[1][1] * v[1] + a.m[2][1] * v[2] + a.m[3][1] * v[3],
+            a.m[0][2] * v[0] + a.m[1][2] * v[1] + a.m[2][2] * v[2] + a.m[3][2] * v[3],
+            a.m[0][3] * v[0] + a.m[1][3] * v[1] + a.m[2][3] * v[2] + a.m[3][3] * v[3],
+        };
+    }
+
+    /// Invert affine/projection matrix (general 4×4 via adjugate).
+    fn inverse(a: Mat4) Mat4 {
+        // Flatten column-major → row-major for classic inverse.
+        var m: [16]f32 = undefined;
+        var c: usize = 0;
+        while (c < 4) : (c += 1) {
+            var r: usize = 0;
+            while (r < 4) : (r += 1) m[r * 4 + c] = a.m[c][r];
+        }
+        var inv: [16]f32 = undefined;
+        inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+        inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+        inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+        inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+        inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+        inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+        inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+        inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+        inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+        inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+        inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+        inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+        inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+        inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+        inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+        inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+        const det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+        if (@abs(det) < 1e-12) return .{};
+        const idet = 1.0 / det;
+        var out: Mat4 = .{};
+        c = 0;
+        while (c < 4) : (c += 1) {
+            var r: usize = 0;
+            while (r < 4) : (r += 1) {
+                // inv is row-major; store column-major
+                out.m[c][r] = inv[r * 4 + c] * idet;
+            }
+        }
+        return out;
+    }
+};
+
+/// Match sgl_perspective (FOV in radians).
+fn matPerspective(fovy: f32, aspect: f32, znear: f32, zfar: f32) Mat4 {
+    const sine = @sin(fovy * 0.5);
+    const cotan = @cos(fovy * 0.5) / sine;
+    const dz = zfar - znear;
+    var m: Mat4 = .{};
+    m.m = .{
+        .{ cotan / aspect, 0, 0, 0 },
+        .{ 0, cotan, 0, 0 },
+        .{ 0, 0, -(zfar + znear) / dz, -1 },
+        .{ 0, 0, -2 * znear * zfar / dz, 0 },
+    };
+    return m;
+}
+
+/// Match gluLookAt / sgl_lookat — OpenGL column-major view matrix.
+fn matLookAt(eye: Vec3, center: Vec3, up_in: Vec3) Mat4 {
+    const fwd = Vec3.norm(Vec3.sub(center, eye));
+    var side = Vec3.cross(fwd, up_in);
+    side = Vec3.norm(side);
+    const up = Vec3.cross(side, fwd);
+    // Columns: side | up | -fwd | translation
+    return .{ .m = .{
+        .{ side.x, side.y, side.z, 0 },
+        .{ up.x, up.y, up.z, 0 },
+        .{ -fwd.x, -fwd.y, -fwd.z, 0 },
+        .{
+            -Vec3.dot(side, eye),
+            -Vec3.dot(up, eye),
+            Vec3.dot(fwd, eye),
+            1,
+        },
+    } };
+}
+
+/// Game9 `GetScreenToWorldRay`: unproject near & far through inv(P·V).
+fn screenToWorldRay(mx: f32, my: f32, w: f32, h: f32, eye: Vec3, inv_pv: Mat4) Ray {
+    // NDC (top-left screen → Y-up NDC), clip w=1
+    const ndc_x = (2.0 * mx / w) - 1.0;
+    const ndc_y = 1.0 - (2.0 * my / h);
+    const near_h = Mat4.mulV4(inv_pv, .{ ndc_x, ndc_y, -1.0, 1.0 });
+    const far_h = Mat4.mulV4(inv_pv, .{ ndc_x, ndc_y, 1.0, 1.0 });
+    const nw = 1.0 / near_h[3];
+    const fw = 1.0 / far_h[3];
+    const near_w = Vec3{ .x = near_h[0] * nw, .y = near_h[1] * nw, .z = near_h[2] * nw };
+    const far_w = Vec3{ .x = far_h[0] * fw, .y = far_h[1] * fw, .z = far_h[2] * fw };
+    return .{
+        .pos = eye, // perspective: ray from camera (Game9)
+        .dir = Vec3.norm(Vec3.sub(far_w, near_w)),
+    };
+}
+
+/// Game9 `GetWorldToScreen`: P·V · world, divide, flip Y for top-left UI.
+fn worldToScreen(p: Vec3, w: f32, h: f32, pv: Mat4) ?struct { x: f32, y: f32, z: f32 } {
+    const clip = Mat4.mulV4(pv, .{ p.x, p.y, p.z, 1.0 });
+    if (@abs(clip[3]) < 1e-8) return null;
+    const iw = 1.0 / clip[3];
+    const ndc_x = clip[0] * iw;
+    const ndc_y = clip[1] * iw;
+    const ndc_z = clip[2] * iw;
+    if (ndc_z < -1.0 or ndc_z > 1.0) return null; // outside clip volume
+    return .{
+        .x = (ndc_x + 1.0) * 0.5 * w,
+        .y = (1.0 - ndc_y) * 0.5 * h,
+        .z = ndc_z,
+    };
+}
+
 const Entity = struct {
     pos: Vec3,
     half: f32,
@@ -113,41 +269,7 @@ fn buildCam(st: *const state.State) Cam {
     };
 }
 
-/// Project world → screen. Must match sgl lookat + perspective (OpenGL-style,
-/// Y-up NDC, FOV in radians). Screen origin is top-left (UI convention).
-fn project(p: Vec3, cam: Cam, w: f32, h: f32) ?struct { x: f32, y: f32, z: f32 } {
-    const rel = Vec3.sub(p, cam.eye);
-    // Eye-space matching sgl/glu lookat: X=side, Y=up, Z=−forward
-    const ex = Vec3.dot(rel, cam.right);
-    const ey = Vec3.dot(rel, cam.up);
-    const ez = -Vec3.dot(rel, cam.forward); // negative in front
-    if (ez >= -1.0) return null; // behind / too near
-    const f = 1.0 / @tan(cam.fov_y * 0.5);
-    const aspect = w / @max(h, 1);
-    // Perspective divide by −ez (positive depth in front)
-    const ndc_x = (ex * f / aspect) / (-ez);
-    const ndc_y = (ey * f) / (-ez);
-    return .{
-        .x = (ndc_x + 1) * 0.5 * w,
-        .y = (1 - ndc_y) * 0.5 * h, // NDC +Y → screen top
-        .z = -ez,
-    };
-}
 
-fn cubeCorners(e: Entity) [8]Vec3 {
-    const h = e.half;
-    const p = e.pos;
-    return .{
-        .{ .x = p.x - h, .y = p.y - h, .z = p.z - h },
-        .{ .x = p.x + h, .y = p.y - h, .z = p.z - h },
-        .{ .x = p.x + h, .y = p.y + h, .z = p.z - h },
-        .{ .x = p.x - h, .y = p.y + h, .z = p.z - h },
-        .{ .x = p.x - h, .y = p.y - h, .z = p.z + h },
-        .{ .x = p.x + h, .y = p.y - h, .z = p.z + h },
-        .{ .x = p.x + h, .y = p.y + h, .z = p.z + h },
-        .{ .x = p.x - h, .y = p.y + h, .z = p.z + h },
-    };
-}
 
 fn drawCube(e: Entity, selected: bool, accent: ui.Color) void {
     const h = e.half;
@@ -326,29 +448,15 @@ fn rayAabb(orig: Vec3, dir: Vec3, bmin: Vec3, bmax: Vec3) ?f32 {
     return null;
 }
 
-/// Pick only the solid cube (mesh AABB) — labels are not clickable.
-fn pickEntity(mx: f32, my: f32, cam: Cam, w: f32, h: f32) i32 {
-    // Screen → NDC (top-left UI → OpenGL Y-up NDC)
-    const ndc_x = (2.0 * mx / w) - 1.0;
-    const ndc_y = 1.0 - (2.0 * my / h);
-    const t = @tan(cam.fov_y * 0.5);
-    const aspect = w / @max(h, 1);
-    // Eye-space ray (GL: looks down −Z), then to world via camera basis.
-    const dir = Vec3.norm(Vec3.add(
-        Vec3.add(
-            Vec3.scale(cam.right, ndc_x * aspect * t),
-            Vec3.scale(cam.up, ndc_y * t),
-        ),
-        cam.forward,
-    ));
-    const orig = cam.eye;
-
+/// Pick solid cube only (labels never generate hits). Game9 pattern:
+/// build ray once, then run per-object intersection, keep nearest hit.
+fn pickEntity(ray: Ray) i32 {
     var best: i32 = -1;
     var best_t: f32 = 1e9;
     for (ents, 0..) |e, i| {
         const bmin = Vec3{ .x = e.pos.x - e.half, .y = e.pos.y - e.half, .z = e.pos.z - e.half };
         const bmax = Vec3{ .x = e.pos.x + e.half, .y = e.pos.y + e.half, .z = e.pos.z + e.half };
-        if (rayAabb(orig, dir, bmin, bmax)) |hit_t| {
+        if (rayAabb(ray.pos, ray.dir, bmin, bmax)) |hit_t| {
             if (hit_t < best_t) {
                 best_t = hit_t;
                 best = @intCast(i);
@@ -409,7 +517,6 @@ pub fn frame(a: *app.App) void {
     if (!a.input.mouseDown(.left) or !a.input.keyDown(.space)) st.canvas_panning = false;
 
     var cam = buildCam(st);
-
     if (st.canvas_panning) {
         // Screen drag → world along camera right / up
         const k = st.canvas_dist * 0.0022;
@@ -421,29 +528,31 @@ pub fn frame(a: *app.App) void {
         cam = buildCam(st);
     }
 
-    // Select — LMB click (not pan)
+    const aspect = w / @max(h, 1);
+    const znear: f32 = 1.0;
+    const zfar: f32 = 8000.0;
+    // Same P·V the GPU uses (Game9 keeps these on Camera for pick/project).
+    const mat_p = matPerspective(cam.fov_y, aspect, znear, zfar);
+    const mat_v = matLookAt(cam.eye, cam.target, .{ .x = 0, .y = 1, .z = 0 });
+    const pv = Mat4.mul(mat_p, mat_v);
+    const inv_pv = Mat4.inverse(pv);
+
+    // Select — LMB click (not pan). Ray from Game9-style unproject; hit = cube AABB only.
     if (a.input.mousePressed(.left) and !a.input.keyDown(.space) and !u.palette_open) {
-        // Avoid UI chrome at top ~60px for HUD — still allow world pick there if empty
-        const hit = pickEntity(a.input.mouse_x, a.input.mouse_y, cam, w, h);
+        const ray = screenToWorldRay(a.input.mouse_x, a.input.mouse_y, w, h, cam.eye, inv_pv);
+        const hit = pickEntity(ray);
         st.canvas_sel = hit;
-        if (hit >= 0) {
-            u.log("canvas select");
-        }
+        if (hit >= 0) u.log("canvas select");
     }
 
-    // --- 3D pass ---
+    // --- 3D pass (sgl builds the same perspective/lookat we use for rays) ---
     sgl.defaults();
     if (a.pip_3d.id != 0) sgl.loadPipeline(a.pip_3d);
     sgl.matrixModeProjection();
     sgl.loadIdentity();
-    const aspect = w / @max(h, 1);
-    // sgl_perspective takes FOV in *radians* (sin(fovy/2) with no deg conversion).
-    // Passing degrees made the GPU frustum disagree with project() → labels floated
-    // free of their cubes and the view felt orientation-broken / “gimbal locked”.
-    sgl.perspective(cam.fov_y, aspect, 1.0, 8000.0);
+    sgl.perspective(cam.fov_y, aspect, znear, zfar);
     sgl.matrixModeModelview();
     sgl.loadIdentity();
-    // Turntable: fixed world up so +Y stays upright on screen (never rolls inverted).
     sgl.lookat(
         cam.eye.x,
         cam.eye.y,
@@ -471,11 +580,11 @@ pub fn frame(a: *app.App) void {
     sgl.loadIdentity();
     if (a.pip_alpha.id != 0) sgl.loadPipeline(a.pip_alpha);
 
-    // Labels track each cube’s transform: just above the top face, centered.
-    // (Not clickable — picking is mesh-only via ray/AABB.)
+    // Labels: Game9 GetWorldToScreen through the same P·V as the mesh.
+    // Anchor = cube origin (center), slightly above top face — entity transform is authority.
     for (ents, 0..) |e, i| {
         const anchor = Vec3.add(e.pos, .{ .x = 0, .y = e.half + 6, .z = 0 });
-        if (project(anchor, cam, w, h)) |s| {
+        if (worldToScreen(anchor, w, h, pv)) |s| {
             const sel = st.canvas_sel == @as(i32, @intCast(i));
             const col = if (sel) u.theme.accent else u.theme.text;
             const tw = u.font.measure(e.name, 1.5).w;
