@@ -616,19 +616,7 @@ pub fn moveEnd(edit: *Edit, text: []const u8, extend: bool, doc: bool) void {
     edit.block = false;
 }
 
-pub fn moveUp(edit: *Edit, text: []const u8, extend: bool, block: bool) void {
-    if (block) {
-        edit.block = true;
-        // expand block selection up
-        const r = edit.carets[0].caret;
-        const row = rowOf(text, r);
-        if (row > 0) {
-            edit.block_row0 = @min(edit.block_row0, row - 1);
-            edit.block_row1 = @max(edit.block_row1, row);
-            edit.carets[0].caret = posAtRowCol(text, row - 1, edit.preferred_col);
-        }
-        return;
-    }
+pub fn moveUp(edit: *Edit, text: []const u8, extend: bool) void {
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         var r = &edit.carets[i];
@@ -643,15 +631,7 @@ pub fn moveUp(edit: *Edit, text: []const u8, extend: bool, block: bool) void {
     edit.block = false;
 }
 
-pub fn moveDown(edit: *Edit, text: []const u8, extend: bool, block: bool) void {
-    if (block) {
-        edit.block = true;
-        const r = edit.carets[0].caret;
-        const row = rowOf(text, r);
-        edit.block_row1 = @max(edit.block_row1, row + 1);
-        edit.carets[0].caret = posAtRowCol(text, row + 1, edit.preferred_col);
-        return;
-    }
+pub fn moveDown(edit: *Edit, text: []const u8, extend: bool) void {
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         var r = &edit.carets[i];
@@ -659,6 +639,62 @@ pub fn moveDown(edit: *Edit, text: []const u8, extend: bool, block: bool) void {
         r.caret = posAtRowCol(text, row + 1, edit.preferred_col);
         if (!extend) r.anchor = r.caret;
     }
+    edit.block = false;
+}
+
+fn maxRow(text: []const u8) usize {
+    return rowOf(text, text.len);
+}
+
+fn hasCaretAt(edit: *const Edit, pos: usize) bool {
+    var i: usize = 0;
+    while (i < edit.caret_ct) : (i += 1) {
+        if (edit.carets[i].caret == pos or edit.carets[i].anchor == pos) return true;
+        if (edit.carets[i].hasSel() and pos >= edit.carets[i].lo() and pos < edit.carets[i].hi()) return true;
+    }
+    return false;
+}
+
+/// Alt+Shift+Up/Down: add a caret on the next line above/below the current extreme,
+/// at the preferred column (VS Code “Add Cursor Above/Below”).
+pub fn addCaretVertical(edit: *Edit, text: []const u8, delta_row: i32) void {
+    if (edit.caret_ct == 0 or delta_row == 0) return;
+
+    // Session start: remember origin for Esc, lock column from primary.
+    if (edit.caret_ct == 1 and !edit.ctrl_d_active) {
+        edit.ctrl_d_origin = edit.carets[0].caret;
+        edit.preferred_col = colOf(text, edit.carets[0].caret);
+        // Collapse primary selection so we place a bare caret column.
+        edit.carets[0].anchor = edit.carets[0].caret;
+    }
+
+    var extreme_row: usize = rowOf(text, edit.carets[0].caret);
+    var i: usize = 1;
+    while (i < edit.caret_ct) : (i += 1) {
+        const r = rowOf(text, edit.carets[i].caret);
+        if (delta_row < 0) {
+            extreme_row = @min(extreme_row, r);
+        } else {
+            extreme_row = @max(extreme_row, r);
+        }
+    }
+
+    var new_row: usize = extreme_row;
+    if (delta_row < 0) {
+        if (extreme_row == 0) return;
+        new_row = extreme_row - 1;
+    } else {
+        const last = maxRow(text);
+        if (extreme_row >= last) return;
+        new_row = extreme_row + 1;
+    }
+
+    const pos = posAtRowCol(text, new_row, edit.preferred_col);
+    if (hasCaretAt(edit, pos)) return;
+    if (edit.caret_ct >= MaxCarets) return;
+
+    edit.carets[edit.caret_ct] = .{ .caret = pos, .anchor = pos };
+    edit.caret_ct += 1;
     edit.block = false;
 }
 
@@ -764,9 +800,11 @@ pub fn ctrlD(edit: *Edit, text: []const u8) void {
     edit.ctrl_d_active = true;
 }
 
-/// End multi-caret / Ctrl+D session (Esc): one caret at session origin, no selection.
+/// End multi-caret / Ctrl+D / Alt+Shift cursor session (Esc):
+/// one caret at session origin, no selection.
 pub fn collapseCarets(edit: *Edit) void {
-    const pos = if (edit.ctrl_d_active) edit.ctrl_d_origin else edit.carets[0].caret;
+    const restore = edit.ctrl_d_active or edit.caret_ct > 1;
+    const pos = if (restore) edit.ctrl_d_origin else edit.carets[0].caret;
     edit.caret_ct = 1;
     edit.carets[0] = .{ .caret = pos, .anchor = pos };
     edit.ctrl_d_active = false;
@@ -894,16 +932,24 @@ pub fn handleKeys(
         edit.ctrl_d_active = false;
     }
     if (multiline and input.keyPressed(.up)) {
-        moveUp(edit, text, shift, alt and shift);
-        edit.preferred_col = colOf(text, edit.carets[0].caret);
+        if (alt and shift) {
+            // Alt+Shift+Up: add caret on line above (column multi-cursor)
+            addCaretVertical(edit, text, -1);
+        } else {
+            moveUp(edit, text, shift);
+            edit.ctrl_d_active = false;
+        }
         edit.coalesce_typing = false;
-        if (!(alt and shift)) edit.ctrl_d_active = false;
     }
     if (multiline and input.keyPressed(.down)) {
-        moveDown(edit, text, shift, alt and shift);
-        edit.preferred_col = colOf(text, edit.carets[0].caret);
+        if (alt and shift) {
+            // Alt+Shift+Down: add caret on line below
+            addCaretVertical(edit, text, 1);
+        } else {
+            moveDown(edit, text, shift);
+            edit.ctrl_d_active = false;
+        }
         edit.coalesce_typing = false;
-        if (!(alt and shift)) edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.home)) {
         moveHome(edit, text, shift, ctrl);
@@ -1036,6 +1082,9 @@ pub fn handleMouseDown(
 
     // Alt+click: add secondary caret (VS Code / JetBrains style)
     if (alt and !shift and multiline) {
+        if (edit.caret_ct == 1 and !edit.ctrl_d_active) {
+            edit.ctrl_d_origin = edit.carets[0].caret;
+        }
         if (edit.caret_ct < MaxCarets) {
             edit.carets[edit.caret_ct] = .{ .caret = pos, .anchor = pos };
             edit.caret_ct += 1;
@@ -1217,4 +1266,33 @@ test "ctrlD Esc restores origin caret and clears selection" {
     try std.testing.expect(!edit.carets[0].hasSel());
     try std.testing.expectEqual(@as(usize, 6), edit.carets[0].caret);
     try std.testing.expect(!edit.ctrl_d_active);
+}
+
+test "alt-shift add caret above/below and Esc restores" {
+    const text = "abc def ghi jkl\nabc def zhi jkl\nabc def xhi jkl";
+    //              ^0            ^16(z)           ^32(x) roughly
+    // find z
+    const z_pos = std.mem.indexOfScalar(u8, text, 'z').?;
+    const g_pos = std.mem.indexOfScalar(u8, text, 'g').?;
+    const x_pos = std.mem.indexOfScalar(u8, text, 'x').?;
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .caret = z_pos, .anchor = z_pos };
+    addCaretVertical(&edit, text, -1);
+    try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
+    try std.testing.expectEqual(z_pos, edit.carets[0].caret);
+    try std.testing.expectEqual(g_pos, edit.carets[1].caret);
+    try std.testing.expectEqual(z_pos, edit.ctrl_d_origin);
+
+    // reset and try down
+    edit = .{};
+    edit.carets[0] = .{ .caret = z_pos, .anchor = z_pos };
+    addCaretVertical(&edit, text, 1);
+    try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
+    try std.testing.expectEqual(z_pos, edit.carets[0].caret);
+    try std.testing.expectEqual(x_pos, edit.carets[1].caret);
+
+    collapseCarets(&edit);
+    try std.testing.expectEqual(@as(usize, 1), edit.caret_ct);
+    try std.testing.expectEqual(z_pos, edit.carets[0].caret);
+    try std.testing.expect(!edit.carets[0].hasSel());
 }
