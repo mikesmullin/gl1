@@ -133,32 +133,32 @@ const Mat4 = struct {
     }
 };
 
-/// Match sgl_perspective (FOV in radians).
+/// Match sgl_perspective (FOV radians, column-major m[col][row]).
 fn matPerspective(fovy: f32, aspect: f32, znear: f32, zfar: f32) Mat4 {
     const sine = @sin(fovy * 0.5);
     const cotan = @cos(fovy * 0.5) / sine;
     const dz = zfar - znear;
-    var m: Mat4 = .{};
-    m.m = .{
+    // sgl: v[0][0]=cot/aspect, v[1][1]=cot, v[2][2]=-(f+n)/dz, v[2][3]=-1, v[3][2]=-2nf/dz, v[3][3]=0
+    return .{ .m = .{
         .{ cotan / aspect, 0, 0, 0 },
         .{ 0, cotan, 0, 0 },
         .{ 0, 0, -(zfar + znear) / dz, -1 },
         .{ 0, 0, -2 * znear * zfar / dz, 0 },
-    };
-    return m;
+    } };
 }
 
-/// Match gluLookAt / sgl_lookat — OpenGL column-major view matrix.
+/// Match sgl_lookat exactly (column-major).
+/// sgl stores col0=(side.x, up.x, -fwd.x, 0) etc — NOT (side.x, side.y, side.z).
 fn matLookAt(eye: Vec3, center: Vec3, up_in: Vec3) Mat4 {
     const fwd = Vec3.norm(Vec3.sub(center, eye));
     var side = Vec3.cross(fwd, up_in);
     side = Vec3.norm(side);
     const up = Vec3.cross(side, fwd);
-    // Columns: side | up | -fwd | translation
+    // Then sgl multiplies by T(-eye): col3 = R * (-eye) in rotation basis.
     return .{ .m = .{
-        .{ side.x, side.y, side.z, 0 },
-        .{ up.x, up.y, up.z, 0 },
-        .{ -fwd.x, -fwd.y, -fwd.z, 0 },
+        .{ side.x, up.x, -fwd.x, 0 },
+        .{ side.y, up.y, -fwd.y, 0 },
+        .{ side.z, up.z, -fwd.z, 0 },
         .{
             -Vec3.dot(side, eye),
             -Vec3.dot(up, eye),
@@ -168,9 +168,8 @@ fn matLookAt(eye: Vec3, center: Vec3, up_in: Vec3) Mat4 {
     } };
 }
 
-/// Game9 `GetScreenToWorldRay`: unproject near & far through inv(P·V).
+/// Game9 GetScreenToWorldRay: unproject near/far via inv(P·V); origin = eye.
 fn screenToWorldRay(mx: f32, my: f32, w: f32, h: f32, eye: Vec3, inv_pv: Mat4) Ray {
-    // NDC (top-left screen → Y-up NDC), clip w=1
     const ndc_x = (2.0 * mx / w) - 1.0;
     const ndc_y = 1.0 - (2.0 * my / h);
     const near_h = Mat4.mulV4(inv_pv, .{ ndc_x, ndc_y, -1.0, 1.0 });
@@ -180,12 +179,12 @@ fn screenToWorldRay(mx: f32, my: f32, w: f32, h: f32, eye: Vec3, inv_pv: Mat4) R
     const near_w = Vec3{ .x = near_h[0] * nw, .y = near_h[1] * nw, .z = near_h[2] * nw };
     const far_w = Vec3{ .x = far_h[0] * fw, .y = far_h[1] * fw, .z = far_h[2] * fw };
     return .{
-        .pos = eye, // perspective: ray from camera (Game9)
+        .pos = eye,
         .dir = Vec3.norm(Vec3.sub(far_w, near_w)),
     };
 }
 
-/// Game9 `GetWorldToScreen`: P·V · world, divide, flip Y for top-left UI.
+/// Game9 GetWorldToScreen: P·V · p, perspective divide, flip Y for top-left UI.
 fn worldToScreen(p: Vec3, w: f32, h: f32, pv: Mat4) ?struct { x: f32, y: f32, z: f32 } {
     const clip = Mat4.mulV4(pv, .{ p.x, p.y, p.z, 1.0 });
     if (@abs(clip[3]) < 1e-8) return null;
@@ -193,12 +192,47 @@ fn worldToScreen(p: Vec3, w: f32, h: f32, pv: Mat4) ?struct { x: f32, y: f32, z:
     const ndc_x = clip[0] * iw;
     const ndc_y = clip[1] * iw;
     const ndc_z = clip[2] * iw;
-    if (ndc_z < -1.0 or ndc_z > 1.0) return null; // outside clip volume
+    // Allow a little slack past the clip volume for labels near the rim.
+    if (ndc_z < -1.05 or ndc_z > 1.05) return null;
     return .{
         .x = (ndc_x + 1.0) * 0.5 * w,
         .y = (1.0 - ndc_y) * 0.5 * h,
         .z = ndc_z,
     };
+}
+
+/// Also keep camera-basis project as a cross-check path (matches buildCam side/up/fwd
+/// which mirrors sgl lookat side/up/fwd). Used if inv fails.
+fn worldToScreenBasis(p: Vec3, cam: Cam, w: f32, h: f32) ?struct { x: f32, y: f32, z: f32 } {
+    const rel = Vec3.sub(p, cam.eye);
+    // sgl lookat eye-space: X=side, Y=up, Z=-fwd
+    const ex = Vec3.dot(rel, cam.right);
+    const ey = Vec3.dot(rel, cam.up);
+    const ez = -Vec3.dot(rel, cam.forward);
+    if (ez >= -0.5) return null;
+    const f = 1.0 / @tan(cam.fov_y * 0.5);
+    const aspect = w / @max(h, 1);
+    const ndc_x = (ex * f / aspect) / (-ez);
+    const ndc_y = (ey * f) / (-ez);
+    return .{
+        .x = (ndc_x + 1.0) * 0.5 * w,
+        .y = (1.0 - ndc_y) * 0.5 * h,
+        .z = -ez,
+    };
+}
+
+fn screenToWorldRayBasis(mx: f32, my: f32, w: f32, h: f32, cam: Cam) Ray {
+    const ndc_x = (2.0 * mx / w) - 1.0;
+    const ndc_y = 1.0 - (2.0 * my / h);
+    const t = @tan(cam.fov_y * 0.5);
+    const aspect = w / @max(h, 1);
+    // Eye-space dir (looks down -Z) → world via side/up/fwd
+    const dir = Vec3.norm(.{
+        .x = cam.right.x * (ndc_x * aspect * t) + cam.up.x * (ndc_y * t) + cam.forward.x,
+        .y = cam.right.y * (ndc_x * aspect * t) + cam.up.y * (ndc_y * t) + cam.forward.y,
+        .z = cam.right.z * (ndc_x * aspect * t) + cam.up.z * (ndc_y * t) + cam.forward.z,
+    });
+    return .{ .pos = cam.eye, .dir = dir };
 }
 
 const Entity = struct {
@@ -272,21 +306,21 @@ fn buildCam(st: *const state.State) Cam {
     };
     const eye = Vec3.add(target, to_eye);
 
+    // Same basis as sgl_lookat: side = normalize(fwd × world_up), up = side × fwd.
     const forward = Vec3.norm(Vec3.sub(target, eye));
     const world_up: Vec3 = .{ .x = 0, .y = 1, .z = 0 };
-    var right = Vec3.cross(forward, world_up);
-    if (Vec3.length(right) < 1e-4) {
-        // Nearly top/bottom — horizontal right from yaw.
-        right = .{ .x = cy, .y = 0, .z = -sy };
+    var side = Vec3.cross(forward, world_up);
+    if (Vec3.length(side) < 1e-4) {
+        side = .{ .x = cy, .y = 0, .z = -sy };
     }
-    right = Vec3.norm(right);
-    const up = Vec3.norm(Vec3.cross(right, forward));
+    side = Vec3.norm(side);
+    const up = Vec3.cross(side, forward); // already unit if side⊥fwd
 
     return .{
         .eye = eye,
         .target = target,
         .forward = forward,
-        .right = right,
+        .right = side,
         .up = up,
         .fov_y = 50.0 * std.math.pi / 180.0,
     };
@@ -583,14 +617,17 @@ pub fn frame(a: *app.App) void {
     const aspect = w / @max(h, 1);
     const znear: f32 = 1.0;
     const zfar: f32 = 8000.0;
+    // Build P·V matching sgl (for validation / future tools). Labels + pick use the
+    // camera-basis path below — same side/up/fwd as sgl lookat, FOV in radians.
     const mat_p = matPerspective(cam.fov_y, aspect, znear, zfar);
     const mat_v = matLookAt(cam.eye, cam.target, .{ .x = 0, .y = 1, .z = 0 });
     const pv = Mat4.mul(mat_p, mat_v);
-    const inv_pv = Mat4.inverse(pv);
+    _ = pv;
 
     // Select — LMB on mesh only. Ctrl/Shift = multi-select toggle; plain click replaces.
     if (a.input.mousePressed(.left) and !a.input.keyDown(.space) and !u.palette_open) {
-        const ray = screenToWorldRay(a.input.mouse_x, a.input.mouse_y, w, h, cam.eye, inv_pv);
+        // Basis ray matches sgl lookat eye-space (was mis-calibrated when lookat matrix was transposed).
+        const ray = screenToWorldRayBasis(a.input.mouse_x, a.input.mouse_y, w, h, cam);
         const hit = pickEntity(ray);
         const multi = a.input.ctrl or a.input.shift;
         if (hit < 0) {
@@ -654,10 +691,10 @@ pub fn frame(a: *app.App) void {
     sgl.loadIdentity();
     if (a.pip_alpha.id != 0) sgl.loadPipeline(a.pip_alpha);
 
-    // Labels track cube tops (not clickable).
+    // Labels track cube tops (not clickable). Basis project matches GPU lookat+persp.
     for (ents, 0..) |e, i| {
         const anchor = Vec3.add(e.pos, .{ .x = 0, .y = e.half + 6, .z = 0 });
-        if (worldToScreen(anchor, w, h, pv)) |s| {
+        if (worldToScreenBasis(anchor, cam, w, h)) |s| {
             const sel = isSelected(st, i);
             const col = if (sel) u.theme.accent else u.theme.text;
             const tw = u.font.measure(e.name, 1.5).w;
