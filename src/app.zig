@@ -57,6 +57,8 @@ pub fn run(allocator: std.mem.Allocator, scene: scenes.SceneKind) void {
         .window_title = "gl1",
         .logger = .{ .func = slog.func },
         .icon = .{ .sokol_default = true },
+        .enable_clipboard = true,
+        .clipboard_size = 16 * 1024,
     });
 }
 
@@ -100,6 +102,16 @@ fn loadFont() void {
 fn trySceneHotkeys() void {
     // Ctrl+digit only so Shift+1 (`!`) and bare digits remain free for typing.
     if (!g.input.ctrl) return;
+    // Ctrl+K / Ctrl+P → command palette (handled in scenes via ui flag).
+    if (g.input.keyPressed(.k) or g.input.keyPressed(.p)) {
+        g.ui.palette_open = !g.ui.palette_open;
+        if (g.ui.palette_open) {
+            g.ui.palette_query_len = 0;
+            g.ui.palette_sel = 0;
+            g.ui.focus = .{}; // don't type into other fields
+        }
+        return;
+    }
     if (g.input.keyPressed(.one)) g.scene = .triangle;
     if (g.input.keyPressed(.two)) g.scene = .rects;
     if (g.input.keyPressed(.three)) g.scene = .text;
@@ -107,11 +119,16 @@ fn trySceneHotkeys() void {
     if (g.input.keyPressed(.five)) g.scene = .panels;
     if (g.input.keyPressed(.six)) g.scene = .layout;
     if (g.input.keyPressed(.seven)) g.scene = .inspector;
+    if (g.input.keyPressed(.eight)) g.scene = .canvas;
     if (g.input.keyPressed(.zero)) g.scene = .storybook;
 }
 
 export fn event(ev: [*c]const sapp.Event) void {
     g.input.handleEvent(ev);
+    // Clipboard paste events (requires enable_clipboard).
+    if (ev.*.type == .CLIPBOARD_PASTED) {
+        g.input.pushPaste(sapp.getClipboardString());
+    }
     trySceneHotkeys();
     // Esc handled after frame so modals can consume it first.
 }
@@ -143,7 +160,7 @@ export fn frame() void {
     sgl.loadIdentity();
     if (g.pip_alpha.id != 0) sgl.loadPipeline(g.pip_alpha);
 
-    g.ui.beginFrame(&g.input, &g.font, g.width, g.height, g.dt, g.time);
+    g.ui.beginFrame(&g.input, &g.font, g.width, g.height, g.dt, g.time); // input is mutable for paste consume
     scenes.frame(&g);
     g.ui.endFrame();
     // Phase 8: UI builds a command list; Sokol/GL backend executes it.
@@ -153,10 +170,11 @@ export fn frame() void {
     sg.endPass();
     sg.commit();
 
-    // Esc: modal/UI may have consumed it; otherwise quit.
+    // Esc: palette/modal may have consumed it; else clear focus; else quit.
     if (g.input.keyPressed(.escape) and !g.ui.consumed_escape) {
-        // Also clear text focus before quitting if focused.
-        if (!g.ui.focus.isNone()) {
+        if (g.ui.palette_open) {
+            g.ui.palette_open = false;
+        } else if (!g.ui.focus.isNone()) {
             g.ui.focus = .{};
         } else {
             sapp.quit();

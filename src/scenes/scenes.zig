@@ -32,6 +32,7 @@ pub const SceneKind = enum {
     panels,
     layout,
     inspector,
+    canvas,
 };
 
 pub fn parse(name: []const u8) ?SceneKind {
@@ -51,6 +52,7 @@ pub const all = [_]SceneKind{
     .panels,
     .layout,
     .inspector,
+    .canvas,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,6 +93,15 @@ pub const State = struct {
     confirm_delete: bool = false,
     world_open: bool = true,
     npcs_open: bool = true,
+    notes: [256]u8 = undefined,
+    notes_len: usize = 0,
+    show_console: bool = true,
+    console_h: f32 = 120,
+    /// Canvas scene pan/zoom.
+    canvas_ox: f32 = 0,
+    canvas_oy: f32 = 0,
+    canvas_zoom: f32 = 1,
+    canvas_panning: bool = false,
 
     pub fn init(self: *State) void {
         const hello = "hello gl1";
@@ -99,6 +110,9 @@ pub const State = struct {
         const en = "Hero";
         @memcpy(self.entity_name[0..en.len], en);
         self.entity_name_len = en.len;
+        const note = "Notes…";
+        @memcpy(self.notes[0..note.len], note);
+        self.notes_len = note.len;
     }
 };
 
@@ -118,10 +132,53 @@ pub fn frame(a: *app.App) void {
         .panels => framePanels(a),
         .layout => frameLayout(a),
         .inspector => frameInspector(a),
+        .canvas => frameCanvas(a),
         .storybook => frameStorybook(a),
     }
 
+    // Global command palette (Ctrl+K / Ctrl+P) — drawn last so it stacks on top.
+    runCommandPalette(a);
+
     drawHud(a);
+}
+
+const palette_cmds = [_][]const u8{
+    "Go: Storybook",
+    "Go: Triangle",
+    "Go: Rects",
+    "Go: Text",
+    "Go: Widgets",
+    "Go: Panels",
+    "Go: Layout",
+    "Go: Inspector",
+    "Go: Canvas",
+    "Theme: Toggle cool dark",
+    "Action: Toast hello",
+    "Action: Log hello",
+    "Action: Toggle console",
+};
+
+fn runCommandPalette(a: *app.App) void {
+    const u = &a.ui;
+    if (u.commandPalette(.{ .items = &palette_cmds })) |idx| {
+        switch (idx) {
+            0 => a.scene = .storybook,
+            1 => a.scene = .triangle,
+            2 => a.scene = .rects,
+            3 => a.scene = .text,
+            4 => a.scene = .widgets_basic,
+            5 => a.scene = .panels,
+            6 => a.scene = .layout,
+            7 => a.scene = .inspector,
+            8 => a.scene = .canvas,
+            9 => a.scene_state.theme_cool = !a.scene_state.theme_cool,
+            10 => u.toast("Hello from palette", .ok, 1.5),
+            11 => u.log("palette: hello"),
+            12 => a.scene_state.show_console = !a.scene_state.show_console,
+            else => {},
+        }
+        u.log("palette");
+    }
 }
 
 fn drawHud(a: *app.App) void {
@@ -258,7 +315,8 @@ fn frameInspector(a: *app.App) void {
 
     const top = u.theme.menubar_h;
     const bot = u.theme.statusbar_h;
-    const body_h = a.height - top - bot;
+    const console_h: f32 = if (st.show_console) st.console_h + 8 else 0;
+    const body_h = a.height - top - bot - console_h;
     const margin: f32 = 8;
     const max_split = a.width - 280;
     st.split_w = std.math.clamp(st.split_w, 160, @max(160, max_split));
@@ -426,12 +484,64 @@ fn frameInspector(a: *app.App) void {
         }
 
         u.separator();
+        // Viewport preview of selected entity tint
+        u.label(.{ .text = "Viewport preview", .color = u.theme.text_dim });
+        const vp_w = @min(280, right_w - 40);
+        const vp_h: f32 = 100;
+        const vpr = u.alloc(vp_w, vp_h);
+        const swatches = [_]ui.Color{
+            .{ 1, 1, 1, 1 },
+            .{ 0.9, 0.3, 0.3, 1 },
+            .{ 0.3, 0.85, 0.4, 1 },
+            .{ 0.3, 0.5, 0.95, 1 },
+            .{ 0.95, 0.8, 0.2, 1 },
+        };
+        const tint = swatches[st.color_idx % swatches.len];
+        u.drawRectBorder(vpr, .{ 0.06, 0.07, 0.09, 1 }, u.theme.panel_border, 1);
+        // "Entity" rect centered in viewport
+        const ew = 48 * (0.5 + st.entity_hp / 100);
+        const eh = 48 * (0.5 + st.entity_hp / 100);
+        if (st.entity_visible) {
+            u.drawRect(.{
+                .x = vpr.x + (vpr.w - ew) * 0.5,
+                .y = vpr.y + (vpr.h - eh) * 0.5,
+                .w = ew,
+                .h = eh,
+            }, tint);
+        }
+        u.drawText(vpr.x + 6, vpr.y + 4, 1.5, u.theme.text_dim, st.entity_name[0..st.entity_name_len]);
+
+        _ = u.textArea(.{
+            .id = "notes",
+            .label = "Notes",
+            .buf = &st.notes,
+            .len = &st.notes_len,
+            .w = @min(320, right_w - 40),
+            .h = 72,
+        });
+
+        u.separator();
         if (u.button(.{ .id = "open_modal", .label = "Open About Modal" })) {
             st.modal_open = true;
+            u.log("opened about modal");
         }
         if (u.button(.{ .id = "toast_warn", .label = "Toast warning" })) {
             u.toast("Something needs attention", .warn, 2.5);
+            u.log("toast warning");
         }
+        _ = u.toggle(.{ .id = "show_con", .label = "Show console", .value = &st.show_console });
+    }
+
+    // Console docked under panels
+    if (st.show_console) {
+        const ch = st.console_h;
+        u.console(.{
+            .id = "insp_log",
+            .x = margin,
+            .y = a.height - bot - ch - 4,
+            .w = a.width - margin * 2,
+            .h = ch,
+        });
     }
 
     // Context menu for entities
@@ -440,13 +550,20 @@ fn frameInspector(a: *app.App) void {
         .items = &.{ "Rename", "Duplicate", "Delete…", "Focus in view" },
     })) |choice| {
         switch (choice) {
-            0 => u.toast("Rename (stub)", .info, 1.2),
+            0 => {
+                u.toast("Rename (stub)", .info, 1.2);
+                u.log("ctx: rename");
+            },
             1 => {
                 st.clicks +%= 1;
                 u.toast("Duplicated", .ok, 1.2);
+                u.log("ctx: duplicate");
             },
             2 => st.confirm_delete = true,
-            3 => u.toast("Focused camera on entity", .info, 1.5),
+            3 => {
+                u.toast("Focused camera on entity", .info, 1.5);
+                u.log("ctx: focus");
+            },
             else => {},
         }
     }
@@ -483,7 +600,78 @@ fn frameInspector(a: *app.App) void {
 
     var rbuf: [64]u8 = undefined;
     const right = std.fmt.bufPrint(&rbuf, "{s}  split={d:.0}", .{ st.entity_name[0..st.entity_name_len], st.split_w }) catch "";
-    u.statusBar("inspector ready  |  drag splitter  |  right-click list", right);
+    u.statusBar("Ctrl+K palette  |  drag splitter  |  right-click list", right);
+}
+
+fn frameCanvas(a: *app.App) void {
+    const u = &a.ui;
+    const st = &a.scene_state;
+    const sgl = @import("sokol").gl;
+
+    u.drawText(16, 16, 2.0, u.theme.text, "scene: canvas — pan (MMB/Space+LMB)  zoom (wheel)");
+    u.drawText(16, 40, 1.5, u.theme.text_dim, "Grid in world space; entities as colored quads");
+
+    // Zoom
+    if (a.input.scroll_y != 0) {
+        const factor: f32 = if (a.input.scroll_y > 0) 1.1 else 1.0 / 1.1;
+        st.canvas_zoom = std.math.clamp(st.canvas_zoom * factor, 0.25, 8);
+    }
+
+    // Pan
+    const space_pan = a.input.keyDown(.space) and a.input.mouseDown(.left);
+    const mid_pan = a.input.mouseDown(.middle);
+    if (space_pan or mid_pan) {
+        st.canvas_ox += a.input.mouse_dx;
+        st.canvas_oy += a.input.mouse_dy;
+    }
+
+    const z = st.canvas_zoom;
+    const ox = st.canvas_ox + a.width * 0.5;
+    const oy = st.canvas_oy + a.height * 0.5;
+
+    // Grid
+    const grid: f32 = 40;
+    const gw = grid * z;
+    sgl.beginLines();
+    sgl.c4f(0.2, 0.22, 0.26, 1);
+    var gx: f32 = @mod(ox, gw);
+    while (gx < a.width) : (gx += gw) {
+        sgl.v2f(gx, 0);
+        sgl.v2f(gx, a.height);
+    }
+    var gy: f32 = @mod(oy, gw);
+    while (gy < a.height) : (gy += gw) {
+        sgl.v2f(0, gy);
+        sgl.v2f(a.width, gy);
+    }
+    // Axes
+    sgl.c4f(0.5, 0.25, 0.25, 1);
+    sgl.v2f(ox, 0);
+    sgl.v2f(ox, a.height);
+    sgl.c4f(0.25, 0.5, 0.3, 1);
+    sgl.v2f(0, oy);
+    sgl.v2f(a.width, oy);
+    sgl.end();
+
+    // Demo entities in world space
+    const ents = [_]struct { x: f32, y: f32, c: ui.Color, n: []const u8 }{
+        .{ .x = 0, .y = 0, .c = .{ 0.9, 0.3, 0.3, 1 }, .n = "Origin" },
+        .{ .x = 120, .y = -40, .c = .{ 0.3, 0.85, 0.4, 1 }, .n = "Hero" },
+        .{ .x = -80, .y = 90, .c = .{ 0.3, 0.5, 0.95, 1 }, .n = "Slime" },
+        .{ .x = 200, .y = 140, .c = .{ 0.95, 0.8, 0.2, 1 }, .n = "Torch" },
+    };
+    for (ents) |e| {
+        const sx = ox + e.x * z;
+        const sy = oy + e.y * z;
+        const s = 28 * z;
+        u.drawRect(.{ .x = sx - s * 0.5, .y = sy - s * 0.5, .w = s, .h = s }, e.c);
+        u.drawText(sx - s * 0.5, sy + s * 0.5 + 4, 1.5, u.theme.text, e.n);
+    }
+
+    var buf: [48]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "zoom {d:.2}  pan {d:.0},{d:.0}", .{ z, st.canvas_ox, st.canvas_oy }) catch "";
+    u.drawText(16, a.height - 40, 1.5, u.theme.text_dim, msg);
+    u.drawText(16, a.height - 22, 1.5, u.theme.text_dim, "Ctrl+K palette  |  Ctrl+8 canvas");
 }
 
 fn frameStorybook(a: *app.App) void {
@@ -538,8 +726,8 @@ fn frameStorybook(a: *app.App) void {
     u.endScroll();
 
     u.drawText(16, a.height - 80, 1.5, u.theme.text_dim, "Ctrl+0 storybook");
-    u.drawText(16, a.height - 62, 1.5, u.theme.text_dim, "Ctrl+1..7 scenes");
-    u.drawText(16, a.height - 44, 1.5, u.theme.text_dim, "Esc: modal then quit");
+    u.drawText(16, a.height - 62, 1.5, u.theme.text_dim, "Ctrl+1..8 scenes");
+    u.drawText(16, a.height - 44, 1.5, u.theme.text_dim, "Ctrl+K palette");
 
     const dx = sidebar_w + 16;
     const dw = a.width - dx - 16;
@@ -553,14 +741,18 @@ fn frameStorybook(a: *app.App) void {
                 u.label(.{ .text = "Style A: begin/end + defer. Dark theme.", .color = u.theme.text_dim });
                 u.separator();
                 u.label(.{ .text = "Launch: zig build && ./zig-out/bin/gl1" });
-                u.label(.{ .text = "Scenes: --scene storybook|inspector|triangle|..." });
+                u.label(.{ .text = "Ctrl+K command palette  |  Ctrl+0..8 scenes" });
                 u.label(.{ .text = "Font: assets/fonts/glyphs-outline.bmp" });
                 u.separator();
                 if (u.button(.{ .id = "go_insp", .label = "Open inspector scene" })) {
                     a.scene = .inspector;
                 }
-                if (u.button(.{ .id = "go_tri", .label = "Open triangle scene" })) {
-                    a.scene = .triangle;
+                if (u.button(.{ .id = "go_canvas", .label = "Open canvas scene" })) {
+                    a.scene = .canvas;
+                }
+                if (u.button(.{ .id = "open_pal", .label = "Open command palette" })) {
+                    a.ui.palette_open = true;
+                    a.ui.palette_query_len = 0;
                 }
             },
             1 => {

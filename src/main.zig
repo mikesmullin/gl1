@@ -23,10 +23,12 @@ const HELP =
     \\  panels          begin/end panels
     \\  layout          vstack/hstack
     \\  inspector       composite app chrome demo
+    \\  canvas          pan/zoom 2D world grid
     \\
     \\keys:
-    \\  Ctrl+0..7       switch scenes
-    \\  Esc             close modal / clear focus / quit
+    \\  Ctrl+0..8       switch scenes
+    \\  Ctrl+K / Ctrl+P command palette
+    \\  Esc             close modal/palette / clear focus / quit
     \\
 ;
 

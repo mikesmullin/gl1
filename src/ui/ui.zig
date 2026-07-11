@@ -54,7 +54,7 @@ const MaxPrev = 256;
 const IdRect = struct { id: Id, r: Rect };
 
 pub const Ui = struct {
-    input: *const Input = undefined,
+    input: *Input = undefined,
     font: *const Font = undefined,
     theme: Theme = theme_mod.dark,
     width: f32 = 0,
@@ -113,6 +113,18 @@ pub const Ui = struct {
     ctx_y: f32 = 0,
     ctx_owner: Id = .{},
 
+    /// Command palette (Ctrl+K / Ctrl+P).
+    palette_open: bool = false,
+    palette_query: [64]u8 = undefined,
+    palette_query_len: usize = 0,
+    palette_sel: usize = 0,
+
+    /// Simple ring log for console panel.
+    log_lines: [48][96]u8 = undefined,
+    log_lens: [48]usize = @splat(0),
+    log_count: usize = 0,
+    log_head: usize = 0,
+
     pub const ToastKind = enum { info, ok, warn, err };
     pub const Toast = struct {
         text: [96]u8 = undefined,
@@ -139,7 +151,7 @@ pub const Ui = struct {
         self.inited = false;
     }
 
-    pub fn beginFrame(self: *Ui, input: *const Input, font: *const Font, w: f32, h: f32, dt: f32, time: f64) void {
+    pub fn beginFrame(self: *Ui, input: *Input, font: *const Font, w: f32, h: f32, dt: f32, time: f64) void {
         self.input = input;
         self.font = font;
         self.width = w;
@@ -248,6 +260,15 @@ pub const Ui = struct {
         @memcpy(self.tooltip_text[0..n], text[0..n]);
         self.tooltip_len = n;
         self.tooltip_set = true;
+    }
+
+    pub fn log(self: *Ui, text: []const u8) void {
+        const slot = self.log_head % self.log_lines.len;
+        const n = @min(text.len, self.log_lines[0].len);
+        @memcpy(self.log_lines[slot][0..n], text[0..n]);
+        self.log_lens[slot] = n;
+        self.log_head += 1;
+        if (self.log_count < self.log_lines.len) self.log_count += 1;
     }
 
     pub fn toast(self: *Ui, text: []const u8, kind: ToastKind, duration_s: f64) void {
@@ -705,13 +726,7 @@ pub const Ui = struct {
 
         var changed = false;
         if (focused) {
-            if (self.input.text_len > 0) {
-                const avail = opts.buf.len - opts.len.*;
-                const n = @min(avail, self.input.text_len);
-                @memcpy(opts.buf[opts.len.* .. opts.len.* + n], self.input.text[0..n]);
-                opts.len.* += n;
-                changed = n > 0;
-            }
+            changed = self.appendFocusedText(opts.buf, opts.len) or changed;
             if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
                 opts.len.* -= 1;
                 changed = true;
@@ -724,6 +739,239 @@ pub const Ui = struct {
             self.drawRect(.{ .x = box.x + 6 + m.w, .y = box.y + 4, .w = 2, .h = box.h - 8 }, self.theme.text);
         }
         return changed;
+    }
+
+    fn appendFocusedText(self: *Ui, buf: []u8, len: *usize) bool {
+        var changed = false;
+        if (self.input.text_len > 0) {
+            const avail = buf.len - len.*;
+            const n = @min(avail, self.input.text_len);
+            @memcpy(buf[len.* .. len.* + n], self.input.text[0..n]);
+            len.* += n;
+            changed = n > 0;
+        }
+        // Ctrl+V / clipboard paste buffer
+        if (self.input.paste_len > 0) {
+            const pasted = self.input.paste[0..self.input.paste_len];
+            const avail = buf.len - len.*;
+            const n = @min(avail, pasted.len);
+            // Filter to printable ASCII + newline for multi-line.
+            var wrote: usize = 0;
+            for (pasted[0..n]) |ch| {
+                if (ch == '\n' or ch == '\t' or (ch >= 32 and ch < 127)) {
+                    if (len.* + wrote < buf.len) {
+                        buf[len.* + wrote] = if (ch == '\t') ' ' else ch;
+                        wrote += 1;
+                    }
+                }
+            }
+            len.* += wrote;
+            self.input.paste_len = 0;
+            changed = wrote > 0 or changed;
+        }
+        return changed;
+    }
+
+    /// Multi-line text area.
+    pub fn textArea(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        buf: []u8,
+        len: *usize,
+        w: f32 = 280,
+        h: f32 = 100,
+    }) bool {
+        const i = self.id(opts.id);
+        const size = self.theme.font_size;
+        const r = self.alloc(opts.w, opts.h + 14);
+        self.drawText(r.x, r.y, size, self.theme.text_dim, opts.label);
+        const box = Rect{ .x = r.x, .y = r.y + 12, .w = opts.w, .h = opts.h };
+        const st = self.interact(i, box, false);
+        if (st.clicked) self.focus = i;
+        const focused = self.focus.eq(i);
+        self.drawRectBorder(box, self.theme.input_bg, if (focused) self.theme.accent else self.theme.panel_border, 1);
+
+        var changed = false;
+        if (focused) {
+            changed = self.appendFocusedText(opts.buf, opts.len) or changed;
+            if (self.input.keyPressed(.enter)) {
+                if (opts.len.* < opts.buf.len) {
+                    opts.buf[opts.len.*] = '\n';
+                    opts.len.* += 1;
+                    changed = true;
+                }
+            }
+            if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
+                opts.len.* -= 1;
+                changed = true;
+            }
+        }
+
+        self.cmds.push(.{ .scissor_push = .{ .x = box.x + 1, .y = box.y + 1, .w = box.w - 2, .h = box.h - 2 } });
+        // Draw lines
+        const cx = box.x + 6;
+        var cy = box.y + 4;
+        const lh = self.font.lineHeight(size);
+        const text = opts.buf[0..opts.len.*];
+        var line_start: usize = 0;
+        var li: usize = 0;
+        while (li <= text.len) : (li += 1) {
+            if (li == text.len or text[li] == '\n') {
+                const line = text[line_start..li];
+                self.drawText(cx, cy, size, self.theme.text, line);
+                cy += lh;
+                line_start = li + 1;
+            }
+        }
+        if (focused and @mod(@as(i64, @intFromFloat(self.time * 2)), 2) == 0) {
+            self.drawRect(.{ .x = cx, .y = cy - lh, .w = 2, .h = lh }, self.theme.text);
+        }
+        self.cmds.push(.{ .scissor_pop = {} });
+        return changed;
+    }
+
+    /// Console log panel (reads internal ring buffer).
+    pub fn console(self: *Ui, opts: struct { id: []const u8, x: f32, y: f32, w: f32, h: f32 }) void {
+        const r = self.place(opts.x, opts.y, opts.w, opts.h);
+        self.drawRectBorder(r, self.theme.input_bg, self.theme.panel_border, 1);
+        self.drawText(r.x + 6, r.y + 4, self.theme.font_size, self.theme.text_dim, "console");
+        self.cmds.push(.{ .scissor_push = .{ .x = r.x + 1, .y = r.y + 18, .w = r.w - 2, .h = r.h - 20 } });
+        const lh = self.font.lineHeight(self.theme.font_size);
+        var y = r.y + r.h - 6 - lh;
+        var shown: usize = 0;
+        const max_lines: usize = @intFromFloat(@max(1, (r.h - 24) / lh));
+        var i: usize = 0;
+        while (i < self.log_count and shown < max_lines) : (i += 1) {
+            const idx = (self.log_head - 1 - i) % self.log_lines.len;
+            const line = self.log_lines[idx][0..self.log_lens[idx]];
+            self.drawText(r.x + 6, y, self.theme.font_size, self.theme.text, line);
+            y -= lh;
+            shown += 1;
+        }
+        self.cmds.push(.{ .scissor_pop = {} });
+        _ = opts.id;
+    }
+
+    /// Command palette overlay. Returns selected command index into `items`, or null.
+    pub fn commandPalette(self: *Ui, opts: struct {
+        items: []const []const u8,
+    }) ?usize {
+        if (!self.palette_open) return null;
+
+        // Dim
+        self.drawRect(.{ .x = 0, .y = 0, .w = self.width, .h = self.height }, self.theme.overlay);
+
+        if (self.input.keyPressed(.escape)) {
+            self.palette_open = false;
+            self.consumed_escape = true;
+            return null;
+        }
+
+        const pw: f32 = @min(520, self.width - 40);
+        const max_vis: usize = 10;
+        const row_h = self.theme.row_h;
+        const ph: f32 = row_h + 12 + @as(f32, @floatFromInt(@min(opts.items.len, max_vis))) * row_h + 16;
+        const px = (self.width - pw) * 0.5;
+        const py = self.height * 0.18;
+        const box = Rect{ .x = px, .y = py, .w = pw, .h = ph };
+        self.drawRectBorder(box, self.theme.modal, self.theme.accent, 2);
+        self.drawText(box.x + 12, box.y + 8, self.theme.title_font_size, self.theme.text_dim, "Command palette");
+
+        // Query field
+        const qbox = Rect{ .x = box.x + 12, .y = box.y + 28, .w = pw - 24, .h = row_h };
+        self.drawRectBorder(qbox, self.theme.input_bg, self.theme.accent, 1);
+        // Always type into palette query while open
+        if (self.input.text_len > 0) {
+            const avail = self.palette_query.len - self.palette_query_len;
+            const n = @min(avail, self.input.text_len);
+            @memcpy(self.palette_query[self.palette_query_len .. self.palette_query_len + n], self.input.text[0..n]);
+            self.palette_query_len += n;
+            self.palette_sel = 0;
+        }
+        if (self.input.keyPressed(.backspace) and self.palette_query_len > 0) {
+            self.palette_query_len -= 1;
+            self.palette_sel = 0;
+        }
+        const q = self.palette_query[0..self.palette_query_len];
+        if (q.len == 0) {
+            self.drawText(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text_dim, "Type to filter…");
+        } else {
+            self.drawText(qbox.x + 8, qbox.y + 6, self.theme.font_size, self.theme.text, q);
+        }
+
+        // Filter matches
+        var matches: [64]usize = undefined;
+        var mct: usize = 0;
+        for (opts.items, 0..) |item, idx| {
+            if (q.len == 0 or containsIgnoreCaseUi(item, q)) {
+                if (mct < matches.len) {
+                    matches[mct] = idx;
+                    mct += 1;
+                }
+            }
+        }
+        if (mct == 0) {
+            self.drawText(box.x + 12, qbox.y + row_h + 12, self.theme.font_size, self.theme.text_dim, "No matches");
+            return null;
+        }
+        if (self.palette_sel >= mct) self.palette_sel = mct - 1;
+
+        if (self.input.keyPressed(.down)) {
+            self.palette_sel = @min(self.palette_sel + 1, mct - 1);
+        }
+        if (self.input.keyPressed(.up)) {
+            if (self.palette_sel > 0) self.palette_sel -= 1;
+        }
+
+        const list_y = qbox.y + row_h + 8;
+        var result: ?usize = null;
+        const vis = @min(mct, max_vis);
+        var vi: usize = 0;
+        while (vi < vis) : (vi += 1) {
+            const item_idx = matches[vi];
+            const ir = Rect{
+                .x = box.x + 12,
+                .y = list_y + @as(f32, @floatFromInt(vi)) * row_h,
+                .w = pw - 24,
+                .h = row_h,
+            };
+            const on = vi == self.palette_sel;
+            if (on) self.drawRect(ir, self.theme.selected);
+            self.drawText(ir.x + 8, ir.y + 6, self.theme.font_size, if (on) self.theme.accent else self.theme.text, opts.items[item_idx]);
+            const st = self.interact(self.id(opts.items[item_idx]), ir, false);
+            if (st.clicked) {
+                result = item_idx;
+            }
+        }
+
+        if (self.input.keyPressed(.enter) and mct > 0) {
+            result = matches[self.palette_sel];
+        }
+        if (result != null) {
+            self.palette_open = false;
+            self.palette_query_len = 0;
+        }
+        return result;
+    }
+
+    fn containsIgnoreCaseUi(hay: []const u8, needle: []const u8) bool {
+        if (needle.len == 0) return true;
+        if (needle.len > hay.len) return false;
+        var i: usize = 0;
+        while (i + needle.len <= hay.len) : (i += 1) {
+            var ok = true;
+            for (needle, 0..) |nc, j| {
+                const hc = hay[i + j];
+                const a: u8 = if (nc >= 'A' and nc <= 'Z') nc + 32 else nc;
+                const b: u8 = if (hc >= 'A' and hc <= 'Z') hc + 32 else hc;
+                if (a != b) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) return true;
+        }
+        return false;
     }
 
     pub fn progress(self: *Ui, opts: struct { label: []const u8, value: f32, w: f32 = 200 }) void {
@@ -1276,13 +1524,7 @@ pub const Ui = struct {
 
         var changed = false;
         if (focused) {
-            if (self.input.text_len > 0) {
-                const avail = opts.buf.len - opts.len.*;
-                const n = @min(avail, self.input.text_len);
-                @memcpy(opts.buf[opts.len.* .. opts.len.* + n], self.input.text[0..n]);
-                opts.len.* += n;
-                changed = n > 0;
-            }
+            changed = self.appendFocusedText(opts.buf, opts.len) or changed;
             if (self.input.keyPressed(.backspace) and opts.len.* > 0) {
                 opts.len.* -= 1;
                 changed = true;

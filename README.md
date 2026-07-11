@@ -30,14 +30,16 @@ zig build
 | `widgets_basic` | Label, button, slider, text field, … |
 | `panels` | `beginPanel` / `endPanel` |
 | `layout` | vstack / hstack |
-| `inspector` | Menubar, resizable split, tree, filter, context menu, form, modals |
+| `inspector` | Menubar, split, tree, filter, context menu, form, viewport, console |
+| `canvas` | Pan/zoom 2D world with grid and entities |
 
 **Keys**
 
 | Input | Action |
 |-------|--------|
-| **Ctrl+0…7** | Switch scene |
-| **Esc** | Close modal → clear text focus → quit |
+| **Ctrl+0…8** | Switch scene |
+| **Ctrl+K** / **Ctrl+P** | Command palette |
+| **Esc** | Close modal/palette → clear focus → quit |
 
 Digits and Shift+digit (e.g. `!`) are free for typing. Scene shortcuts require **Ctrl**.
 

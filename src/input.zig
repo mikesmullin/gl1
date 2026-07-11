@@ -18,6 +18,12 @@ pub const Key = enum {
     s,
     d,
     r,
+    k,
+    p,
+    f,
+    n,
+    c,
+    v,
     one,
     two,
     three,
@@ -51,6 +57,10 @@ pub const Input = struct {
     text: [32]u8 = undefined,
     text_len: usize = 0,
 
+    /// Paste buffer filled from CLIPBOARD_PASTED (consumed by focused text fields).
+    paste: [512]u8 = undefined,
+    paste_len: usize = 0,
+
     /// Modifier state (updated from key events).
     shift: bool = false,
     ctrl: bool = false,
@@ -68,7 +78,20 @@ pub const Input = struct {
         self.keys_pressed = std.EnumArray(Key, bool).initFill(false);
         self.keys_released = std.EnumArray(Key, bool).initFill(false);
         self.text_len = 0;
+        self.paste_len = 0;
         // shift/ctrl/alt kept sticky across frames from key down/up
+    }
+
+    pub fn pushPaste(self: *Input, s: []const u8) void {
+        const n = @min(s.len, self.paste.len);
+        @memcpy(self.paste[0..n], s[0..n]);
+        self.paste_len = n;
+    }
+
+    pub fn takePaste(self: *Input) []const u8 {
+        const out = self.paste[0..self.paste_len];
+        self.paste_len = 0;
+        return out;
     }
 
     pub fn mouseDown(self: *const Input, btn: MouseButton) bool {
@@ -170,6 +193,12 @@ pub const Input = struct {
             .S => .s,
             .D => .d,
             .R => .r,
+            .K => .k,
+            .P => .p,
+            .F => .f,
+            .N => .n,
+            .C => .c,
+            .V => .v,
             ._1 => .one,
             ._2 => .two,
             ._3 => .three,
