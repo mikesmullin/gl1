@@ -346,7 +346,8 @@ pub fn frame(a: *app.App) void {
         st.canvas_pitch = 0;
     }
     if (a.input.keyPressed(.three)) {
-        st.canvas_yaw = -std.math.pi * 0.5;
+        // From +X looking toward −X (Blender “Right”)
+        st.canvas_yaw = std.math.pi * 0.5;
         st.canvas_pitch = 0;
     }
 
