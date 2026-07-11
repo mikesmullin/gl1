@@ -46,6 +46,10 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
 
     var changed = false;
     if (focused) {
+        // Esc ending a Ctrl+D / multi-caret session should not also clear focus.
+        if (ui.input.keyPressed(.escape) and (ed.ctrl_d_active or ed.caret_ct > 1)) {
+            ui.consumed_escape = true;
+        }
         // Content width inside padding (6px left + ~6px right).
         const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
         changed = te.handleKeys(

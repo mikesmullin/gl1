@@ -64,6 +64,8 @@ pub const Edit = struct {
     coalesce_typing: bool = false,
     /// After first Ctrl+D word select, subsequent presses add exact matches.
     ctrl_d_active: bool = false,
+    /// Caret index when the current Ctrl+D session began (Esc restores here).
+    ctrl_d_origin: usize = 0,
     /// User-resized dimensions for multi-line (0 = use layout default).
     user_w: f32 = 0,
     user_h: f32 = 0,
@@ -719,8 +721,14 @@ pub fn posFromPoint(
 /// - No selection: select word nearest caret (session starts; does not add another match yet).
 /// - Already have a selection (mouse/shift or prior Ctrl+D): add next exact match of that
 ///   selection (whole-word when the needle sits on word boundaries). Repeat until no matches.
+/// Esc ends the session: single caret at the pre-session position, no selection.
 pub fn ctrlD(edit: *Edit, text: []const u8) void {
     const p = &edit.carets[0];
+
+    // Remember where the caret was when this Ctrl+D session began.
+    if (!edit.ctrl_d_active) {
+        edit.ctrl_d_origin = p.caret;
+    }
 
     // No selection yet → select nearest word only (like a first press with empty sel).
     if (!p.hasSel()) {
@@ -756,12 +764,11 @@ pub fn ctrlD(edit: *Edit, text: []const u8) void {
     edit.ctrl_d_active = true;
 }
 
-/// Collapse multi-caret to primary (Esc).
+/// End multi-caret / Ctrl+D session (Esc): one caret at session origin, no selection.
 pub fn collapseCarets(edit: *Edit) void {
-    if (edit.caret_ct > 1) {
-        edit.caret_ct = 1;
-        edit.carets[0].anchor = edit.carets[0].caret;
-    }
+    const pos = if (edit.ctrl_d_active) edit.ctrl_d_origin else edit.carets[0].caret;
+    edit.caret_ct = 1;
+    edit.carets[0] = .{ .caret = pos, .anchor = pos };
     edit.ctrl_d_active = false;
     edit.block = false;
 }
@@ -1194,4 +1201,20 @@ test "ctrlD: existing selection adds next match on first press" {
     try std.testing.expectEqual(@as(usize, 14), edit.carets[1].lo());
     try std.testing.expectEqual(@as(usize, 18), edit.carets[1].hi());
     try std.testing.expect(edit.ctrl_d_active);
+}
+
+test "ctrlD Esc restores origin caret and clears selection" {
+    const text = "say haha then haha end";
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .caret = 6, .anchor = 6 }; // middle of first haha
+    ctrlD(&edit, text); // select word
+    try std.testing.expect(edit.carets[0].hasSel());
+    try std.testing.expectEqual(@as(usize, 6), edit.ctrl_d_origin);
+    ctrlD(&edit, text); // add next
+    try std.testing.expectEqual(@as(usize, 2), edit.caret_ct);
+    collapseCarets(&edit);
+    try std.testing.expectEqual(@as(usize, 1), edit.caret_ct);
+    try std.testing.expect(!edit.carets[0].hasSel());
+    try std.testing.expectEqual(@as(usize, 6), edit.carets[0].caret);
+    try std.testing.expect(!edit.ctrl_d_active);
 }
