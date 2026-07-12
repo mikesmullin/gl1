@@ -91,6 +91,17 @@ pub const State = struct {
     collab_b: bool = false,
     list_sel: usize = 1,
     spinner_val: f32 = 12,
+    /// Storybook → Feel (springs) demo state.
+    spring_btn_down: bool = false,
+    spring_damp: f32 = 0.75,
+    spring_freq: f32 = 10,
+    spring_track_target: f32 = 0.5,
+    /// Runtime spring channels (pos/vel); not serialized.
+    feel_press: @import("../spring.zig").Spring1 = .{},
+    feel_squash: @import("../spring.zig").Spring1 = .{ .pos = 1, .target = 1 },
+    feel_follow: @import("../spring.zig").Spring2 = .{},
+    feel_meter: @import("../spring.zig").Spring1 = .{},
+    feel_track: @import("../spring.zig").Spring1 = .{ .pos = 0.5, .target = 0.5 },
     /// 0=dark, 1=cool, 2=warm (see theme.byIndex).
     theme_id: u32 = 0,
     /// Legacy bool kept in sync with theme_id for inspector/palette toggles.

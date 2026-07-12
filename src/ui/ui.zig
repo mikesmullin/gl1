@@ -167,7 +167,7 @@ const LayoutNode = struct {
 };
 
 const MaxLayout = 32;
-const MaxPrev = 256;
+const MaxPrev = 512;
 
 const IdRect = struct { id: Id, r: Rect };
 
@@ -196,11 +196,14 @@ pub const Ui = struct {
     layout_stack: [MaxLayout]LayoutNode = undefined,
     layout_depth: usize = 0,
 
-    /// Previous-frame geometry for interactions (phase 7 light).
+    /// Previous-frame geometry for interactions (phase 7).
     prev_rects: [MaxPrev]IdRect = undefined,
     prev_count: usize = 0,
     curr_rects: [MaxPrev]IdRect = undefined,
     curr_count: usize = 0,
+    /// Tab-order focusables registered this frame (phase 7).
+    tab_ids: [MaxPrev]Id = undefined,
+    tab_count: usize = 0,
 
     id_stack: [16]u64 = undefined,
     id_depth: usize = 0,
@@ -339,6 +342,7 @@ pub const Ui = struct {
         self.consumed_escape = false;
         self.scroll_eaten = false;
         self.soft_cursor = .cursor_arrow;
+        self.tab_count = 0;
 
         // Soft pointer: first LMB press in the window arms capture and swallows that click.
         self.soft_pointer_swallow = false;
@@ -727,6 +731,10 @@ pub const Ui = struct {
 
     pub fn interact(self: *Ui, i: Id, r: Rect, disabled: bool) struct { hot: bool, active: bool, clicked: bool } {
         self.remember(i, r);
+        if (!disabled and self.tab_count < MaxPrev) {
+            self.tab_ids[self.tab_count] = i;
+            self.tab_count += 1;
+        }
         if (disabled) return .{ .hot = false, .active = false, .clicked = false };
 
         const over = self.hitTest(i, r);
@@ -740,7 +748,40 @@ pub const Ui = struct {
         }
         const is_active = self.active.eq(i);
         const clicked = is_active and self.input.mouseReleased(.left) and over;
+        // Keyboard focus ring (phase 7): accent outline when this id has text/tab focus.
+        if (self.focus.eq(i)) {
+            self.drawRectBorder(.{ .x = r.x - 1, .y = r.y - 1, .w = r.w + 2, .h = r.h + 2 }, .{ 0, 0, 0, 0 }, self.theme.accent, 1);
+        }
         return .{ .hot = is_hot, .active = is_active, .clicked = clicked };
+    }
+
+    /// Cycle keyboard focus among widgets registered via `interact` this frame.
+    /// Call once near end of frame (after widgets). Shift+Tab goes backward.
+    pub fn handleTabFocus(self: *Ui) void {
+        if (self.tab_count == 0) return;
+        if (!self.input.keyPressed(.tab)) return;
+        // Don't steal Tab while palette/modal own keys (optional).
+        if (self.palette_open) return;
+        var idx: usize = 0;
+        var found = false;
+        var i: usize = 0;
+        while (i < self.tab_count) : (i += 1) {
+            if (self.tab_ids[i].eq(self.focus)) {
+                idx = i;
+                found = true;
+                break;
+            }
+        }
+        if (self.input.shift) {
+            if (found) {
+                idx = if (idx == 0) self.tab_count - 1 else idx - 1;
+            } else idx = self.tab_count - 1;
+        } else {
+            if (found) {
+                idx = (idx + 1) % self.tab_count;
+            } else idx = 0;
+        }
+        self.focus = self.tab_ids[idx];
     }
 
     // --- Layout containers --------------------------------------------------
@@ -963,6 +1004,22 @@ pub const Ui = struct {
 
     pub fn checkbox(self: *Ui, opts: struct { id: []const u8, label: []const u8, value: *bool }) bool {
         return components.checkbox.checkbox(self, opts);
+    }
+
+    pub fn badge(self: *Ui, opts: struct { label: []const u8, color: ?Color = null }) void {
+        if (opts.color) |c| {
+            components.badge.badge(self, .{ .label = opts.label, .color = c });
+        } else {
+            components.badge.badge(self, .{ .label = opts.label });
+        }
+    }
+
+    pub fn alert(self: *Ui, opts: struct { text: []const u8, kind: components.alert.Kind = .info }) void {
+        components.alert.alert(self, opts);
+    }
+
+    pub fn spinner(self: *Ui, opts: struct { size: f32 = 22, label: []const u8 = "" }) void {
+        components.spinner.spinner(self, opts);
     }
 
     pub fn slider(self: *Ui, opts: struct {

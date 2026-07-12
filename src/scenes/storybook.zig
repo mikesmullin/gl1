@@ -4,14 +4,17 @@ const ui = @import("../ui/ui.zig");
 const theme_mod = @import("../ui/theme.zig");
 const state = @import("state.zig");
 
-/// Overview first, then alphabetical. Inspector removed (use Ctrl+P).
+/// Overview first, then alphabetical. Feel = springs / game-feel demos.
 const items = [_][]const u8{
     "Overview",
+    "Alert",
+    "Badge",
     "Button",
     "Checkbox",
     "Collapsible",
     "ContextMenu",
     "Dropdown",
+    "Feel",
     "Icons",
     "Layout",
     "ListBox",
@@ -22,6 +25,7 @@ const items = [_][]const u8{
     "Radio",
     "Scroll",
     "Slider",
+    "Spinner",
     "Splitter",
     "Tabs",
     "TextInput",
@@ -82,8 +86,24 @@ pub fn frame(a: *app.App) void {
             u.label(.{ .text = "and other building blocks in isolation — each page is a small interactive demo." });
             u.separator();
             u.label(.{ .text = "Stack: Zig (master) · Sokol · custom IMUI. Dark-first themes.", .color = u.theme.text_dim });
+            u.separator();
+            u.label(.{ .text = "Also try: Feel (springs), Spinner / Badge / Alert, scene changes (diamond wipe).", .color = u.theme.text_dim });
+        } else if (eq(tab, "Alert")) {
+            u.label(.{ .text = "Alert — inline status banner" });
+            u.alert(.{ .text = "Info: scene switched via Ctrl+P uses a diamond wipe.", .kind = .info });
+            u.alert(.{ .text = "Success: selection framed.", .kind = .ok });
+            u.alert(.{ .text = "Warning: soft pointer armed — Esc to release.", .kind = .warn });
+            u.alert(.{ .text = "Error: could not load optional asset.", .kind = .err });
+        } else if (eq(tab, "Badge")) {
+            u.label(.{ .text = "Badge — compact status chips" });
+            u.beginHStack(.{});
+            u.badge(.{ .label = "default" });
+            u.badge(.{ .label = "live", .color = .{ 0.3, 0.85, 0.45, 1 } });
+            u.badge(.{ .label = "beta", .color = u.theme.warning });
+            u.badge(.{ .label = "error", .color = u.theme.danger });
+            _ = u.endHStack();
         } else if (eq(tab, "Button")) {
-            u.label(.{ .text = "Button — hover / active / click" });
+            u.label(.{ .text = "Button — hover / active / click (pointer cursor)" });
             if (u.button(.{ .id = "sb_btn", .label = "Primary" })) {
                 st.clicks +%= 1;
                 u.toast("Clicked Primary", .ok, 1.2);
@@ -139,6 +159,97 @@ pub fn frame(a: *app.App) void {
                 .open = &st.dropdown_open,
                 .w = 220,
             });
+        } else if (eq(tab, "Feel")) {
+            // --- Game feel / springs (Ryan Juckett + Toyful Games patterns) ---
+            u.label(.{ .text = "Feel — springs for responsive UX (game feel)" });
+            u.label(.{ .text = "Damped springs (Game9 Spring.c / Juckett). Tune damping + frequency live.", .color = u.theme.text_dim });
+            _ = u.slider(.{ .id = "feel_d", .label = "Damping", .value = &st.spring_damp, .min = 0.05, .max = 1.5, .w = 260 });
+            _ = u.slider(.{ .id = "feel_f", .label = "Frequency", .value = &st.spring_freq, .min = 1, .max = 28, .w = 260 });
+            u.separator();
+
+            const dt = a.dt;
+            const damp = st.spring_damp;
+            const freq = st.spring_freq;
+
+            // 1) Press button with squash + settle
+            u.label(.{ .text = "1. Juicy button (press squash + bounce)" });
+            const br = u.alloc(160, 56);
+            const bst = u.interact(u.id("feel_btn"), br, false);
+            if (bst.hot and u.input.mousePressed(.left)) {
+                st.feel_press.snap(1, 8); // instant down + kick
+                st.feel_squash.target = 0.72;
+                st.feel_squash.nudge(-2.5);
+            }
+            if (!u.input.mouseDown(.left)) {
+                st.feel_press.target = 0;
+                st.feel_squash.target = 1;
+            } else if (bst.active or (bst.hot and u.input.mouseDown(.left))) {
+                st.feel_press.target = 1;
+                st.feel_squash.target = 0.72;
+            }
+            st.feel_press.step(dt, damp, freq);
+            st.feel_squash.step(dt, damp, freq * 1.1);
+            const press_y = st.feel_press.pos * 10;
+            const sc = st.feel_squash.pos;
+            const bw = 140 * (2.0 - sc); // stretch X when Y squishes
+            const bh = 40 * sc;
+            const bx = br.x + (br.w - bw) * 0.5;
+            const by = br.y + 8 + press_y;
+            u.drawRectBorder(.{ .x = bx, .y = by, .w = bw, .h = bh }, u.theme.button_hot, u.theme.accent, 1);
+            u.drawText(bx + 36, by + bh * 0.3, u.theme.font_size, u.theme.text, "Press me");
+            if (u.button(.{ .id = "feel_nudge", .label = "Nudge / attract", .w = 140 })) {
+                st.feel_squash.nudge(-6);
+                st.feel_press.nudge(4);
+            }
+
+            u.separator();
+            // 2) Follow mouse (2D spring)
+            u.label(.{ .text = "2. Follow spring (cursor trail)" });
+            const fr = u.alloc(0, 120);
+            u.drawRectBorder(fr, .{ 0.08, 0.09, 0.11, 1 }, u.theme.panel_border, 1);
+            // Local mouse relative to pad
+            var mx = u.input.mouse_x;
+            var my = u.input.mouse_y;
+            if (!fr.contains(mx, my)) {
+                mx = fr.x + fr.w * 0.5;
+                my = fr.y + fr.h * 0.5;
+            }
+            st.feel_follow.setTarget(mx, my);
+            st.feel_follow.step(dt, damp, freq);
+            const fx = st.feel_follow.x.pos;
+            const fy = st.feel_follow.y.pos;
+            u.drawRect(.{ .x = fx - 8, .y = fy - 8, .w = 16, .h = 16 }, u.theme.accent);
+            u.drawText(fr.x + 8, fr.y + 6, 1.4, u.theme.text_dim, "hover this pad");
+
+            u.separator();
+            // 3) Track / snap
+            u.label(.{ .text = "3. Track slider (spring follows value; release snaps to 0 / 0.5 / 1)" });
+            _ = u.slider(.{ .id = "feel_track_goal", .label = "Goal", .value = &st.spring_track_target, .min = 0, .max = 1, .w = 280 });
+            st.feel_track.target = st.spring_track_target;
+            if (u.input.mouseReleased(.left)) {
+                // Snap goal to thirds
+                const g0 = st.spring_track_target;
+                st.spring_track_target = if (g0 < 0.33) 0 else if (g0 < 0.66) 0.5 else 1;
+                st.feel_track.target = st.spring_track_target;
+            }
+            st.feel_track.step(dt, damp, freq);
+            const tr = u.alloc(300, 28);
+            u.drawRectBorder(tr, u.theme.input_bg, u.theme.panel_border, 1);
+            const knob_x = tr.x + 8 + (tr.w - 24) * st.feel_track.pos;
+            u.drawRect(.{ .x = knob_x, .y = tr.y + 4, .w = 16, .h = tr.h - 8 }, u.theme.accent);
+
+            u.separator();
+            // 4) Meter pulse
+            u.label(.{ .text = "4. Meter fill spring + shake on click" });
+            if (u.button(.{ .id = "feel_fill", .label = "Pulse fill", .w = 120 })) {
+                st.feel_meter.target = if (st.feel_meter.target > 0.5) 0.15 else 0.9;
+                st.feel_meter.nudge(3);
+            }
+            st.feel_meter.step(dt, damp, freq);
+            const mr = u.alloc(280, 18);
+            u.drawRectBorder(mr, u.theme.input_bg, u.theme.panel_border, 1);
+            const fw = (mr.w - 4) * std.math.clamp(st.feel_meter.pos, 0, 1);
+            u.drawRect(.{ .x = mr.x + 2, .y = mr.y + 2, .w = fw, .h = mr.h - 4 }, u.theme.accent);
         } else if (eq(tab, "Icons")) {
             u.label(.{ .text = "Icon atlas (24×24) — assets/icons + YAML manifest" });
             u.label(.{ .text = "Soft pointer: first click hides OS cursor. Refer to icons by alias when reporting issues.", .color = u.theme.text_dim });
@@ -300,10 +411,15 @@ pub fn frame(a: *app.App) void {
             }
             u.endScroll();
         } else if (eq(tab, "Slider")) {
-            u.label(.{ .text = "Blender-style number slider" });
+            u.label(.{ .text = "Blender-style number slider (grab on hover)" });
             _ = u.slider(.{ .id = "sb_sp", .label = "Speed", .value = &st.speed });
             _ = u.slider(.{ .id = "sb_vo", .label = "Volume", .value = &st.volume, .min = 0, .max = 2 });
             _ = u.slider(.{ .id = "sb_layer", .label = "Layer", .value = &st.spinner_val, .min = 0, .max = 32, .w = 280 });
+        } else if (eq(tab, "Spinner")) {
+            u.label(.{ .text = "Spinner — indeterminate loading indicator" });
+            u.spinner(.{ .size = 28, .label = "Loading…" });
+            u.separator();
+            u.label(.{ .text = "Building block for RequestState-style buttons later.", .color = u.theme.text_dim });
         } else if (eq(tab, "Splitter")) {
             u.label(.{ .text = "Vertical splitter — drag the gap between panes" });
             u.label(.{ .text = "Standalone demo (width is remembered while you stay in storybook).", .color = u.theme.text_dim });

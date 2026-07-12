@@ -415,7 +415,10 @@ pub fn insertText(edit: *Edit, buf: []u8, len: *usize, bytes: []const u8) bool {
 }
 
 pub fn backspace(edit: *Edit, buf: []u8, len: *usize) bool {
-    if (deleteSelections(edit, buf, len)) return true;
+    if (deleteSelections(edit, buf, len)) {
+        mergeCarets(edit);
+        return true;
+    }
     var order: [MaxCarets]usize = undefined;
     sortCaretsBy(edit, &order, false);
     var changed = false;
@@ -435,11 +438,45 @@ pub fn backspace(edit: *Edit, buf: []u8, len: *usize) bool {
         }
     }
     edit.clampAll(len.*);
+    if (changed) mergeCarets(edit);
+    return changed;
+}
+
+/// Ctrl+Backspace: delete to previous word boundary (or selection).
+pub fn backspaceWord(edit: *Edit, buf: []u8, len: *usize) bool {
+    if (deleteSelections(edit, buf, len)) {
+        mergeCarets(edit);
+        return true;
+    }
+    const text = buf[0..len.*];
+    var order: [MaxCarets]usize = undefined;
+    sortCaretsBy(edit, &order, false);
+    var changed = false;
+    var i: usize = edit.caret_ct;
+    while (i > 0) {
+        i -= 1;
+        const idx = order[i];
+        const r = &edit.carets[idx];
+        if (r.caret == 0) continue;
+        const lo = wordStart(text, r.caret);
+        const hi = r.caret;
+        if (lo >= hi) continue;
+        deleteRange(buf, len, lo, hi);
+        bumpCaretsAfterDelete(edit, lo, hi, idx);
+        r.caret = lo;
+        r.anchor = lo;
+        changed = true;
+    }
+    edit.clampAll(len.*);
+    if (changed) mergeCarets(edit);
     return changed;
 }
 
 pub fn deleteForward(edit: *Edit, buf: []u8, len: *usize) bool {
-    if (deleteSelections(edit, buf, len)) return true;
+    if (deleteSelections(edit, buf, len)) {
+        mergeCarets(edit);
+        return true;
+    }
     var order: [MaxCarets]usize = undefined;
     sortCaretsBy(edit, &order, false);
     var changed = false;
@@ -458,8 +495,62 @@ pub fn deleteForward(edit: *Edit, buf: []u8, len: *usize) bool {
         }
     }
     edit.clampAll(len.*);
+    if (changed) mergeCarets(edit);
     return changed;
 }
+
+/// Ctrl+Delete: delete to next word boundary.
+pub fn deleteWordForward(edit: *Edit, buf: []u8, len: *usize) bool {
+    if (deleteSelections(edit, buf, len)) {
+        mergeCarets(edit);
+        return true;
+    }
+    const text = buf[0..len.*];
+    var order: [MaxCarets]usize = undefined;
+    sortCaretsBy(edit, &order, false);
+    var changed = false;
+    var i: usize = edit.caret_ct;
+    while (i > 0) {
+        i -= 1;
+        const idx = order[i];
+        const r = &edit.carets[idx];
+        if (r.caret >= len.*) continue;
+        const lo = r.caret;
+        const hi = wordEnd(text, r.caret);
+        if (lo >= hi) continue;
+        deleteRange(buf, len, lo, hi);
+        bumpCaretsAfterDelete(edit, lo, hi, idx);
+        r.anchor = r.caret;
+        changed = true;
+    }
+    edit.clampAll(len.*);
+    if (changed) mergeCarets(edit);
+    return changed;
+}
+
+/// Collapse carets that share the same caret/anchor position after edits.
+pub fn mergeCarets(edit: *Edit) void {
+    if (edit.caret_ct <= 1) return;
+    var write: usize = 0;
+    var i: usize = 0;
+    while (i < edit.caret_ct) : (i += 1) {
+        const c = edit.carets[i];
+        var dup = false;
+        var j: usize = 0;
+        while (j < write) : (j += 1) {
+            if (edit.carets[j].caret == c.caret and edit.carets[j].anchor == c.anchor) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            edit.carets[write] = c;
+            write += 1;
+        }
+    }
+    edit.caret_ct = @max(1, write);
+}
+
 
 // --- soft wrap (display only; never mutates buffer) --------------------------
 
@@ -1090,12 +1181,20 @@ pub fn handleKeys(
     }
     if (input.keyPressed(.backspace)) {
         edit.beforeMutate(buf, len.*, false);
-        changed = backspace(edit, buf, len) or changed;
+        if (ctrl) {
+            changed = backspaceWord(edit, buf, len) or changed;
+        } else {
+            changed = backspace(edit, buf, len) or changed;
+        }
         edit.coalesce_typing = false;
     }
     if (input.keyPressed(.delete)) {
         edit.beforeMutate(buf, len.*, false);
-        changed = deleteForward(edit, buf, len) or changed;
+        if (ctrl) {
+            changed = deleteWordForward(edit, buf, len) or changed;
+        } else {
+            changed = deleteForward(edit, buf, len) or changed;
+        }
         edit.coalesce_typing = false;
     }
     // Ctrl+D works on single- and multi-line

@@ -17,3 +17,6 @@ pub const listBox = @import("listBox.zig");
 pub const colorSwatch = @import("colorSwatch.zig");
 pub const searchField = @import("searchField.zig");
 pub const listBoxNav = @import("listBoxNav.zig");
+pub const badge = @import("badge.zig");
+pub const alert = @import("alert.zig");
+pub const spinner = @import("spinner.zig");

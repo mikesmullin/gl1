@@ -52,11 +52,11 @@ fn runCommandPalette(a: *app.App) void {
     const u = &a.ui;
     if (u.commandPalette(.{ .items = &palette_cmds })) |idx| {
         switch (idx) {
-            0 => a.scene = .canvas,
-            1 => a.scene = .panels,
-            2 => a.scene = .storybook,
-            3 => a.scene = .text,
-            4 => a.scene = .triangle,
+            0 => a.requestScene(.canvas),
+            1 => a.requestScene(.panels),
+            2 => a.requestScene(.storybook),
+            3 => a.requestScene(.text),
+            4 => a.requestScene(.triangle),
             5 => u.log("palette: hello"),
             6 => u.toast("Hello from palette", .ok, 1.5),
             7 => a.scene_state.editor_console_open = !a.scene_state.editor_console_open,

@@ -13,6 +13,7 @@ const font_mod = @import("font.zig");
 const icons_mod = @import("icons.zig");
 const ui_mod = @import("ui/ui.zig");
 const scenes = @import("scenes/scenes.zig");
+const transition_mod = @import("transition.zig");
 const font_assets = @import("font_assets");
 const icon_assets = @import("icon_assets");
 
@@ -20,6 +21,7 @@ pub const Input = input_mod.Input;
 pub const Font = font_mod.Font;
 pub const Icons = icons_mod.Icons;
 pub const Ui = ui_mod.Ui;
+pub const Transition = transition_mod.Transition;
 
 pub const App = struct {
     allocator: std.mem.Allocator = undefined,
@@ -29,7 +31,10 @@ pub const App = struct {
     icons: Icons = .{},
     ui: Ui = .{},
     scene: scenes.SceneKind = .storybook,
+    /// Scene to apply when diamond wipe completes.
+    scene_pending: ?scenes.SceneKind = null,
     scene_state: scenes.State = .{},
+    transition: Transition = .{},
     width: f32 = 0,
     height: f32 = 0,
     time: f64 = 0,
@@ -40,6 +45,14 @@ pub const App = struct {
     pip_3d: sgl.Pipeline = .{},
     font_ok: bool = false,
     icons_ok: bool = false,
+
+    /// Request a scene change with diamond wipe (~1s). No-ops if already transitioning.
+    pub fn requestScene(self: *App, next: scenes.SceneKind) void {
+        if (next == self.scene and self.scene_pending == null) return;
+        if (self.transition.busy()) return;
+        self.scene_pending = next;
+        self.transition.startWipe();
+    }
 };
 
 var g: App = .{};
@@ -206,11 +219,25 @@ export fn frame() void {
     g.input.now = g.time;
     g.input.tickKeyRepeat();
 
+    // Scene transition tick (diamond wipe → swap → reveal).
+    if (g.transition.tick(g.dt) == .swap) {
+        if (g.scene_pending) |next| {
+            g.scene = next;
+            g.scene_pending = null;
+        }
+    }
+
     g.ui.beginFrame(&g.input, &g.font, if (g.icons_ok) &g.icons else null, g.width, g.height, g.dt, g.time);
     trySceneHotkeys();
     scenes.frame(&g);
+    g.ui.handleTabFocus();
     g.ui.endFrame();
     g.ui.flushDraw();
+
+    // Diamond overlay after UI so it covers everything.
+    if (g.transition.busy()) {
+        g.transition.draw(g.width, g.height);
+    }
 
     sgl.draw();
     sg.endPass();
