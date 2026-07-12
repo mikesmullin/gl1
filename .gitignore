@@ -8,6 +8,9 @@ dist/
 tmp/
 __pycache__/
 
+# Generated mini-browser video frame strip (extracted from mp4 at runtime / tools)
+assets/demo/media/vframes/
+
 # Editor / OS
 .vscode/
 .idea/

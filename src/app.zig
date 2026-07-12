@@ -177,6 +177,8 @@ export fn init() void {
     loadFont();
     loadIcons();
     loadDemoTex();
+    // Sokol audio for embedded browser <audio> (push model).
+    @import("ui/browser/browser.zig").setupAudio();
     // GPU diamond wipe (after sg + sgl are ready).
     g.transition.init();
     g.last_time = 0;
@@ -347,9 +349,20 @@ export fn frame() void {
 export fn cleanup() void {
     g.transition.deinit();
     g.demo_tex.deinit();
+    if (g.scene_state.browser_ready) {
+        g.scene_state.browser_hello.deinit();
+        g.scene_state.browser_table.deinit();
+        g.scene_state.browser_news.deinit();
+        g.scene_state.browser_flex.deinit();
+        g.scene_state.browser_img.deinit();
+        g.scene_state.browser_audio.deinit();
+        g.scene_state.browser_video.deinit();
+        g.scene_state.browser_ready = false;
+    }
     g.icons.deinit();
     g.font.deinit();
     g.ui.deinit();
+    @import("ui/browser/browser.zig").shutdownAudio();
     sgl.shutdown();
     sg.shutdown();
 }

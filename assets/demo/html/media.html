@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Media tags</title>
+  <style>
+    body { margin: 12px; font-size: 13px; }
+    h1 { font-size: 18px; }
+    .row { display: flex; gap: 12px; margin: 10px 0; }
+    .box { background-color: #1a1d24; border: 1px solid #333; padding: 8px; }
+    img { width: 160px; height: 76px; }
+  </style>
+</head>
+<body>
+  <h1>Media elements</h1>
+  <p>Storybook hosts dedicated &lt;img&gt; / &lt;audio&gt; / &lt;video&gt; panels.</p>
+  <div class="row">
+    <div class="box">
+      <p><strong>img</strong></p>
+      <img src="robot-daddy.png" width="160" height="76" alt="robot daddy" />
+    </div>
+    <div class="box">
+      <p><strong>audio</strong></p>
+      <audio src="robot-g-funk.wav" controls></audio>
+      <p>robot-g-funk (wav)</p>
+    </div>
+  </div>
+  <div class="box">
+    <p><strong>video</strong></p>
+    <video src="robot-breakdance.mp4" width="320" height="180" controls poster="robot-daddy.png"></video>
+    <p>robot-breakdance (frame strip from mp4)</p>
+  </div>
+</body>
+</html>

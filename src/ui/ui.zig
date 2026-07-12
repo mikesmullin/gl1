@@ -294,8 +294,13 @@ pub const Ui = struct {
     log_count: usize = 0,
     log_head: usize = 0,
 
-    /// Nested beginPanel(scroll=true) markers for endPanel scissor pops.
-    panel_scroll_stack: [8]bool = @splat(false),
+    /// Nested beginPanel frames: scissor + deferred wheel (children eat first).
+    panel_scroll_stack: [8]struct {
+        scissor: bool = false,
+        scroll: bool = false,
+        id_a: u64 = 0,
+        body: Rect = .{},
+    } = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
     panel_scroll_depth: usize = 0,
 
     /// Nested beginScroll frames (viewport + id for endScroll scrollbar).
@@ -984,23 +989,18 @@ pub const Ui = struct {
             .h = r.h - title_h,
         };
 
+        // Read scroll offset only — wheel is applied in endPanel after children
+        // (e.g. embedded browser) have had a chance to eatScroll while hovered.
         var scroll_off: f32 = 0;
-        // Always scissor panel body so labels/buttons cannot paint past the border
-        // (fixes “Zig defer.” overflow). Nested text-field scissors restore parent.
         if (opts.scroll) {
             const gop = self.scroll_y.getOrPut(i.a) catch null;
             if (gop) |g| {
                 if (!g.found_existing) g.value_ptr.* = 0;
-                const dy = self.wheelY();
-                if (dy != 0 and body.contains(self.input.mouse_x, self.input.mouse_y)) {
-                    g.value_ptr.* -= dy * 28;
-                    if (g.value_ptr.* < 0) g.value_ptr.* = 0;
-                    if (g.value_ptr.* > 4000) g.value_ptr.* = 4000;
-                    self.eatScroll();
-                }
                 scroll_off = g.value_ptr.*;
             }
         }
+        // Always scissor panel body so labels/buttons cannot paint past the border
+        // (fixes “Zig defer.” overflow). Nested text-field scissors restore parent.
         self.cmds.push(.{ .scissor_push = .{
             .x = body.x + 1,
             .y = body.y + 1,
@@ -1010,8 +1010,12 @@ pub const Ui = struct {
 
         self.pushId(opts.id);
         if (self.panel_scroll_depth < self.panel_scroll_stack.len) {
-            // Always true: endPanel always pops one scissor.
-            self.panel_scroll_stack[self.panel_scroll_depth] = true;
+            self.panel_scroll_stack[self.panel_scroll_depth] = .{
+                .scissor = true,
+                .scroll = opts.scroll,
+                .id_a = i.a,
+                .body = body,
+            };
             self.panel_scroll_depth += 1;
         }
         self.beginVStack(.{
@@ -1030,7 +1034,22 @@ pub const Ui = struct {
         self.popId();
         if (self.panel_scroll_depth > 0) {
             self.panel_scroll_depth -= 1;
-            if (self.panel_scroll_stack[self.panel_scroll_depth]) {
+            const frame = self.panel_scroll_stack[self.panel_scroll_depth];
+            // Deferred panel wheel: only if a child did not claim the scroll.
+            if (frame.scroll) {
+                const dy = self.wheelY();
+                if (dy != 0 and frame.body.contains(self.input.mouse_x, self.input.mouse_y)) {
+                    const gop = self.scroll_y.getOrPut(frame.id_a) catch null;
+                    if (gop) |g| {
+                        if (!g.found_existing) g.value_ptr.* = 0;
+                        g.value_ptr.* -= dy * 28;
+                        if (g.value_ptr.* < 0) g.value_ptr.* = 0;
+                        if (g.value_ptr.* > 4000) g.value_ptr.* = 4000;
+                        self.eatScroll();
+                    }
+                }
+            }
+            if (frame.scissor) {
                 self.cmds.push(.{ .scissor_pop = {} });
             }
         }

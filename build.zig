@@ -17,6 +17,18 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(
         &b.addInstallFile(b.path("assets/icons/icons.yaml"), "bin/assets/icons/icons.yaml").step,
     );
+    // Mini-browser demo media (runtime load; not embedded).
+    // Images: only robot-daddy.png. Audio/video sources as files.
+    // Video frame strip (vframes/) is generated at runtime from the mp4 (gitignored).
+    b.getInstallStep().dependOn(
+        &b.addInstallFile(b.path("assets/demo/media/robot-g-funk.wav"), "bin/assets/demo/media/robot-g-funk.wav").step,
+    );
+    b.getInstallStep().dependOn(
+        &b.addInstallFile(b.path("assets/demo/media/robot-breakdance.mp4"), "bin/assets/demo/media/robot-breakdance.mp4").step,
+    );
+    b.getInstallStep().dependOn(
+        &b.addInstallFile(b.path("assets/demo/media/robot-daddy.png"), "bin/assets/demo/media/robot-daddy.png").step,
+    );
 
     const run_cmd = b.addRunArtifact(host_exe);
     run_cmd.step.dependOn(b.getInstallStep());

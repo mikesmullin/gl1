@@ -152,6 +152,15 @@ pub const State = struct {
     acc_open: i32 = 0,
     /// Storybook sidebar nav has keyboard focus (arrow up/down changes tab).
     sb_nav_focus: bool = false,
+    /// Mini-browser storybook instances (lazy-init on first Browser tab visit).
+    browser_ready: bool = false,
+    browser_hello: @import("../ui/browser/browser.zig").BrowserDoc = .{},
+    browser_table: @import("../ui/browser/browser.zig").BrowserDoc = .{},
+    browser_news: @import("../ui/browser/browser.zig").BrowserDoc = .{},
+    browser_flex: @import("../ui/browser/browser.zig").BrowserDoc = .{},
+    browser_img: @import("../ui/browser/browser.zig").BrowserDoc = .{},
+    browser_audio: @import("../ui/browser/browser.zig").BrowserDoc = .{},
+    browser_video: @import("../ui/browser/browser.zig").BrowserDoc = .{},
     demo_hist: [48]f32 = undefined,
     /// Storybook splitter demo left width.
     sb_split_w: f32 = 160,

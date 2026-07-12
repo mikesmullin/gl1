@@ -101,12 +101,20 @@ Widget gallery with a sidebar index. Default launch scene.
 
 ![storybook](docs/screenshots/storybook-v2.png)
 
+Includes a **Browser** tab: content-only mini-browser “iframes” (HTML/CSS subset,
+img / audio / video demos, fixture pages). See [browser](#browser) below.
+
 | Input | Action |
 |-------|--------|
 | Click sidebar row | Open that widget’s playground; focuses nav |
 | **↑ / ↓** (nav focused) | Move tab selection (scroll follows) |
 | Scroll sidebar / detail | Wheel when hovered (scissor-clipped) |
+| Hover a browser frame | That frame owns the wheel (blocks outer panel) |
 | **Ctrl+P** | Command palette |
+
+```bash
+./zig-out/bin/gl1 --story-tab Browser
+```
 
 ---
 
@@ -164,6 +172,7 @@ Screenshots are the storybook tab for that control (full window: sidebar + detai
 | [alert](src/ui/components/alert.zig) | Inline status banner (info / ok / warn / err) |
 | [avatar](src/ui/components/avatar.zig) | Initials plate + user chip |
 | [badge](src/ui/components/badge.zig) | Compact colored status chip |
+| [browser](src/ui/browser/) | Embedded mini-browser (HTML/CSS subset, media tags) |
 | [button](src/ui/components/button.zig) | Clickable button (optional primary accent) |
 | [checkbox](src/ui/components/checkbox.zig) | Boolean checkbox with label |
 | [colorPicker](src/ui/components/colorPicker.zig) | Sinebow scrub + click-to-edit hex |
@@ -200,6 +209,8 @@ Screenshots are the storybook tab for that control (full window: sidebar + detai
 | [typeahead](src/ui/components/typeahead.zig) | Filter-as-you-type + combobox |
 
 Also in [`ui.zig`](src/ui/ui.zig) (not separate component files): **iconButton**, **treeNode**, **beginPanel** / **beginScroll** / **beginModal**, **tooltip**, **toast**, **menubar** helpers.
+
+The **Browser** tab is implemented under [`src/ui/browser/`](src/ui/browser/) (not a single file in `components/`).
 
 ---
 
@@ -254,6 +265,25 @@ Exclusive accordion sections (only one open).
 |--------|------|--------|
 | `label` | `[]const u8` | Chip text |
 | `color` | `Color` | Optional; default theme accent |
+
+---
+
+### browser
+
+Storybook **Browser** tab — several independent content-only frames (no title/URL
+chrome). Phase‑1 HTML/CSS subset with box/flex-ish layout, lists, links (hand
+cursor + open system browser), plus `<img>` / `<audio>` / `<video>` demos.
+
+![browser](docs/screenshots/components/browser-v1.png)
+
+| Area | Notes |
+|------|--------|
+| Code | [`src/ui/browser/`](src/ui/browser/) (`browser.zig`, HTML parse, CSS, layout, paint, wav) |
+| Open | `--story-tab Browser` |
+| Defaults | White text, dark canvas (CSS can override) |
+| Scroll | Hovered frame eats the wheel so the outer storybook panel does not scroll |
+| Media | `assets/demo/media/robot-daddy.png`, `robot-g-funk.wav`, `robot-breakdance.mp4`; video frames extracted to gitignored `vframes/` via `ffmpeg` on first load |
+| Not yet | JavaScript (QuickJS later), live HTTP fetch, in-process video decode |
 
 ---
 

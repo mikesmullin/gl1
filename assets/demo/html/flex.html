@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Flex demo</title>
+  <style>
+    body { margin: 12px; background-color: #111; color: #eee; font-size: 13px; }
+    h1 { font-size: 18px; color: #7dd3fc; }
+    .row { display: flex; gap: 10px; margin-top: 10px; }
+    .card {
+      background-color: #1e293b;
+      border: 1px solid #334155;
+      padding: 12px;
+      width: 30%;
+    }
+    .card h2 { font-size: 14px; color: #fbbf24; }
+    .card p { color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <h1>Flex row of cards</h1>
+  <p>display:flex · gap · percentage widths</p>
+  <div class="row">
+    <div class="card"><h2>Checkout</h2><p>Embed a short payment flow page.</p></div>
+    <div class="card"><h2>MOTD</h2><p>Daily news or patch notes for players.</p></div>
+    <div class="card"><h2>Ads</h2><p>Lightweight campaign HTML without a full browser.</p></div>
+  </div>
+</body>
+</html>

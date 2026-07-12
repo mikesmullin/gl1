@@ -3,6 +3,8 @@ const app = @import("../app.zig");
 const ui = @import("../ui/ui.zig");
 const theme_mod = @import("../ui/theme.zig");
 const color_picker = @import("../ui/components/colorPicker.zig");
+const browser = @import("../ui/browser/browser.zig");
+const demo_assets = @import("demo_assets");
 const state = @import("state.zig");
 
 /// Overview first, then alphabetical. Feel = springs / game-feel demos.
@@ -12,6 +14,7 @@ pub const items = [_][]const u8{
     "Alert",
     "Avatar",
     "Badge",
+    "Browser",
     "Button",
     "Checkbox",
     "Collapsible",
@@ -53,6 +56,57 @@ pub const items = [_][]const u8{
     "Tree",
     "Typeahead",
 };
+
+fn ensureBrowsers(a: *app.App) void {
+    const st = &a.scene_state;
+    if (st.browser_ready) return;
+    const alloc = a.allocator;
+    st.browser_hello.init(alloc);
+    st.browser_table.init(alloc);
+    st.browser_news.init(alloc);
+    st.browser_flex.init(alloc);
+    st.browser_img.init(alloc);
+    st.browser_audio.init(alloc);
+    st.browser_video.init(alloc);
+
+    st.browser_hello.loadHtml(demo_assets.html_hello, "fixture://hello.html") catch {};
+    st.browser_table.loadHtml(demo_assets.html_table, "fixture://table.html") catch {};
+    // Real origin so root-relative links (/newsletter/…) open on ladybird.org.
+    st.browser_news.loadHtml(demo_assets.html_news, "https://ladybird.org/news/") catch {};
+    st.browser_flex.loadHtml(demo_assets.html_flex, "fixture://flex.html") catch {};
+
+    // Dedicated media iframes (simpler markup)
+    const audio_html =
+        \\<!DOCTYPE html><html><head><title>Audio</title>
+        \\<style>body{margin:12px} h1{font-size:16px}</style></head>
+        \\<body><h1>robot-g-funk.wav</h1>
+        \\<audio src="robot-g-funk.wav" controls></audio>
+        \\<p>Converted from mp3 · mono 22.05kHz · sokol_audio</p></body></html>
+    ;
+    const video_html =
+        \\<!DOCTYPE html><html><head><title>Video</title>
+        \\<style>body{margin:8px} h1{font-size:14px}</style></head>
+        \\<body><h1>robot-breakdance.mp4</h1>
+        \\<video src="robot-breakdance.mp4" width="320" height="200" controls poster="poster.png"></video>
+        \\<p>Phase-1 frame strip (4 fps) · full mp4 on disk for later ffmpeg</p></body></html>
+    ;
+    const img_html =
+        \\<!DOCTYPE html><html><head><title>Image</title>
+        \\<style>body{margin:12px} h1{font-size:16px}</style></head>
+        \\<body><h1>robot-daddy</h1>
+        \\<img src="robot-daddy.png" width="320" height="153" alt="robot daddy"/>
+        \\<p>&lt;img&gt; robot-daddy.png</p></body></html>
+    ;
+    st.browser_audio.loadHtml(audio_html, "fixture://audio.html") catch {};
+    st.browser_audio.loadAudioFile(a.io, "assets/demo/media/robot-g-funk.wav");
+    st.browser_video.loadHtml(video_html, "fixture://video.html") catch {};
+    st.browser_video.ensureVideoPoster(a.io);
+    st.browser_video.loadVideoFrames(a.io);
+    st.browser_img.loadHtml(img_html, "fixture://img.html") catch {};
+    st.browser_img.loadImagePng(a.io, "assets/demo/media/robot-daddy.png", 320, 153);
+
+    st.browser_ready = true;
+}
 
 const fruit = [_][]const u8{ "Apple", "Apricot", "Banana", "Blueberry", "Cherry", "Grape", "Mango", "Orange", "Peach", "Pear" };
 const ms_items = [_][]const u8{ "Read", "Write", "Execute", "Admin", "Audit", "Share" };
@@ -164,7 +218,7 @@ pub fn frame(a: *app.App) void {
     const tab = if (st.selected < items.len) items[st.selected] else "";
     // Tall demos need body scroll. Use per-tab panel id so scroll offset does not
     // carry over from Icons (and leave short pages looking "empty").
-    const detail_scroll = eq(tab, "Icons") or eq(tab, "RequestButton") or eq(tab, "Table") or eq(tab, "KeyValue") or eq(tab, "Histogram") or eq(tab, "ImageWell");
+    const detail_scroll = eq(tab, "Icons") or eq(tab, "RequestButton") or eq(tab, "Table") or eq(tab, "KeyValue") or eq(tab, "Histogram") or eq(tab, "ImageWell") or eq(tab, "Browser");
     var detail_id_buf: [64]u8 = undefined;
     const detail_id = std.fmt.bufPrint(&detail_id_buf, "detail_{s}", .{tab}) catch "detail";
     if (u.beginPanel(.{ .id = detail_id, .x = dx, .y = 16, .w = dw, .h = a.height - 32, .title = title, .scroll = detail_scroll })) {
@@ -231,6 +285,32 @@ pub fn frame(a: *app.App) void {
             u.statusPill(.{ .kind = .warning });
             u.statusPill(.{ .kind = .error_ });
             _ = u.endHStack();
+        } else if (eq(tab, "Browser")) {
+            ensureBrowsers(a);
+            u.label(.{ .text = "Browser — embedded mini-browser (HTML/CSS subset, content-only frames)" });
+            u.label(.{ .text = "Hover a frame to scroll it (blocks outer panel) · white text / black bg defaults · no JS yet", .color = u.theme.text_dim });
+            u.separator();
+
+            const bw = dw - 40;
+            const Rect = ui.Rect;
+            // Stack of content-only iframe instances (no title/url chrome).
+            const frames = [_]struct { title: []const u8, h: f32, doc: *browser.BrowserDoc }{
+                .{ .title = "hello.html", .h = 200, .doc = &st.browser_hello },
+                .{ .title = "img · robot-daddy", .h = 220, .doc = &st.browser_img },
+                .{ .title = "audio", .h = 160, .doc = &st.browser_audio },
+                .{ .title = "video", .h = 260, .doc = &st.browser_video },
+                .{ .title = "geo · ohio (craigslist-ish)", .h = 280, .doc = &st.browser_table },
+                .{ .title = "news (ladybird-ish)", .h = 260, .doc = &st.browser_news },
+                .{ .title = "flex cards", .h = 200, .doc = &st.browser_flex },
+            };
+            for (frames, 0..) |fr, i| {
+                u.label(.{ .text = fr.title, .color = u.theme.text_dim });
+                const slot = u.alloc(bw, fr.h);
+                var id_buf: [32]u8 = undefined;
+                const id = std.fmt.bufPrint(&id_buf, "br_{d}", .{i}) catch "br";
+                browser.frameAt(u, fr.doc, id, Rect{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h }, false);
+                u.spacer(8);
+            }
         } else if (eq(tab, "Button")) {
             u.label(.{ .text = "Button — hover / active / click (pointer cursor)" });
             if (u.button(.{ .id = "sb_btn", .label = "Primary", .primary = true })) {
