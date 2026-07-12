@@ -16,8 +16,7 @@ const HELP =
     \\
     \\scenes:
     \\  storybook       widget gallery (default)
-    \\  inspector       app chrome composite
-    \\  canvas          3D orbit viewport
+    \\  canvas          3D editor viewport + scene tree / inspector / console
     \\  text            bitmap font sample
     \\  triangle        hello triangle
     \\  panels          desktop windows + dock

@@ -15,14 +15,12 @@ pub const nameOf = state.nameOf;
 const triangle = @import("triangle.zig");
 const text = @import("text.zig");
 const panels = @import("panels.zig");
-const inspector = @import("inspector.zig");
 const canvas = @import("canvas.zig");
 const storybook = @import("storybook.zig");
 
 /// Command palette entries (displayed A–Z by the palette).
 const palette_cmds = [_][]const u8{
     "Scene: canvas",
-    "Scene: inspector",
     "Scene: panels",
     "Scene: storybook",
     "Scene: text",
@@ -42,7 +40,6 @@ pub fn frame(a: *app.App) void {
         .triangle => triangle.frame(a),
         .text => text.frame(a),
         .panels => panels.frame(a),
-        .inspector => inspector.frame(a),
         .canvas => canvas.frame(a),
         .storybook => storybook.frame(a),
     }
@@ -55,16 +52,15 @@ fn runCommandPalette(a: *app.App) void {
     const u = &a.ui;
     if (u.commandPalette(.{ .items = &palette_cmds })) |idx| {
         switch (idx) {
-            0 => a.scene = .canvas, // editor (3D + panels)
-            1 => a.scene = .canvas, // inspector alias → same editor
-            2 => a.scene = .panels,
-            3 => a.scene = .storybook,
-            4 => a.scene = .text,
-            5 => a.scene = .triangle,
-            6 => u.log("palette: hello"),
-            7 => u.toast("Hello from palette", .ok, 1.5),
-            8 => a.scene_state.editor_console_open = !a.scene_state.editor_console_open,
-            9 => a.scene_state.theme_id = (a.scene_state.theme_id + 1) % 3,
+            0 => a.scene = .canvas,
+            1 => a.scene = .panels,
+            2 => a.scene = .storybook,
+            3 => a.scene = .text,
+            4 => a.scene = .triangle,
+            5 => u.log("palette: hello"),
+            6 => u.toast("Hello from palette", .ok, 1.5),
+            7 => a.scene_state.editor_console_open = !a.scene_state.editor_console_open,
+            8 => a.scene_state.theme_id = (a.scene_state.theme_id + 1) % 3,
             else => {},
         }
         u.log("palette");

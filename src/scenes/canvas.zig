@@ -434,8 +434,13 @@ fn drawGrid(extent: f32, step: f32) void {
 }
 
 /// Always-on orientation compass (top-right): how world +X/+Y/+Z project on screen.
-fn drawCompass(u: anytype, cam: Cam, screen_w: f32) void {
-    const ox = screen_w - 56;
+/// `right_inset` is the width of UI docked on the right (e.g. expanded inspector + margin);
+/// the gizmo sits left of that with a small gap so it is not covered.
+fn drawCompass(u: anytype, cam: Cam, screen_w: f32, right_inset: f32) void {
+    const gap: f32 = 8;
+    const half: f32 = 42; // disc extends ±half from origin
+    // Disc right edge at screen_w - right_inset - gap.
+    const ox = screen_w - right_inset - gap - half;
     const oy: f32 = 56;
     const len: f32 = 36;
     const axes = [_]struct { v: Vec3, c: ui.Color, label: []const u8 }{
@@ -758,7 +763,12 @@ pub fn frame(a: *app.App) void {
         }
     }
 
-    drawCompass(u, cam, w);
+    // Keep orientation gizmo left of the expanded inspector (gap handled in drawCompass).
+    const insp_inset: f32 = if (st.selectionCount() > 0 and st.editor_inspector_open)
+        st.editor_insp_w + 8
+    else
+        0;
+    drawCompass(u, cam, w, insp_inset);
 
     // Editor panels (scene tree / inspector / console) on top of the viewport.
     editor.draw(a);

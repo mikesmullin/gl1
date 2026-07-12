@@ -1,7 +1,6 @@
 const std = @import("std");
 
 pub const SceneKind = enum {
-    inspector,
     canvas,
     storybook,
     text,
@@ -10,7 +9,6 @@ pub const SceneKind = enum {
 };
 
 pub const all = [_]SceneKind{
-    .inspector,
     .canvas,
     .storybook,
     .text,

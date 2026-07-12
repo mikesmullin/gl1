@@ -75,7 +75,7 @@ pub fn frame(a: *app.App) void {
             u.label(.{ .text = "gl1 is a portable Zig + Sokol immediate-mode UI prototype." });
             u.label(.{ .text = "It explores dense tool-style chrome (panels, editors, 3D canvas) in a single binary." });
             u.label(.{ .text = "Use Ctrl+P to open the command palette, type to filter, and Enter to jump to any scene" });
-            u.label(.{ .text = "or action — including this storybook, the inspector, canvas, and more." });
+            u.label(.{ .text = "or action — including this storybook, the canvas editor, and more." });
             u.separator();
             u.label(.{ .text = "This storybook is a living gallery of every widget the UI toolkit exposes." });
             u.label(.{ .text = "Pick a tab on the left to try buttons, forms, layout, menus, scroll, trees, themes," });

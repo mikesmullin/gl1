@@ -241,7 +241,8 @@ pub fn draw(a: *app.App) void {
         st.editor_hit_insp = .{ .open = false, .x = 0, .y = 0, .w = 0, .h = 0 };
     } else if (!st.editor_inspector_open) {
         // User-collapsed while selection exists — chip to re-open.
-        const chip = ui.Rect{ .x = a.width - 28, .y = 6, .w = 22, .h = 22 };
+        // Sit below the scene/fps HUD label (~y=8) so the icon stays visible.
+        const chip = ui.Rect{ .x = a.width - 28, .y = 26, .w = 22, .h = 22 };
         const stt = u.interact(u.id("ed_insp_expand"), chip, false);
         u.drawRectBorder(chip, if (stt.hot) u.theme.button_hot else u.theme.panel, u.theme.accent, 1);
         // arrow_right art renders pointing left (axis inversion on filled arrows).
