@@ -84,6 +84,10 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
         if (ui.input.keyPressed(.escape) and (ed.ctrl_d_active or ed.caret_ct > 1)) {
             ui.consumed_escape = true;
         }
+        // Tab indent (multi-line) must mark the UI so global Tab focus doesn't steal it.
+        if (opts.multiline and ui.input.keyPressed(.tab) and !ui.input.ctrl and !ui.input.alt) {
+            ui.consumed_tab = true;
+        }
         changed = te.handleKeys(
             ed,
             opts.buf,

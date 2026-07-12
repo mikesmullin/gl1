@@ -230,6 +230,8 @@ pub const Ui = struct {
 
     /// True if a modal consumed Esc this frame (app should not quit).
     consumed_escape: bool = false,
+    /// True if a multi-line text field used Tab for indent (skip focus cycle).
+    consumed_tab: bool = false,
     /// Wheel already claimed this frame (stop bubbling to lower widgets/scene).
     scroll_eaten: bool = false,
 
@@ -340,6 +342,7 @@ pub const Ui = struct {
         self.tooltip_set = false;
         self.tooltip_len = 0;
         self.consumed_escape = false;
+        self.consumed_tab = false;
         self.scroll_eaten = false;
         self.soft_cursor = .cursor_arrow;
         self.tab_count = 0;
@@ -760,6 +763,8 @@ pub const Ui = struct {
     pub fn handleTabFocus(self: *Ui) void {
         if (self.tab_count == 0) return;
         if (!self.input.keyPressed(.tab)) return;
+        // Multi-line fields use Tab for indent.
+        if (self.consumed_tab) return;
         // Don't steal Tab while palette/modal own keys (optional).
         if (self.palette_open) return;
         var idx: usize = 0;

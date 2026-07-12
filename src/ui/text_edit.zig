@@ -29,7 +29,7 @@ pub const Range = struct {
 };
 
 pub const MaxUndo = 48;
-pub const MaxSnap = 512;
+pub const MaxSnap = 2048;
 
 pub const Snap = struct {
     data: [MaxSnap]u8 = undefined,
@@ -707,6 +707,28 @@ pub fn caretDrawPos(
 
 // --- navigation -------------------------------------------------------------
 
+/// Preferred column for vertical motion = column within the current visual row.
+pub fn updatePreferredCol(
+    edit: *Edit,
+    text: []const u8,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    const pos = edit.carets[0].caret;
+    if (font) |f| {
+        var rows_buf: [MaxSoftRows]VisualRow = undefined;
+        const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+        if (n > 0) {
+            const vr = visualRowOf(rows_buf[0..n], pos);
+            const start = rows_buf[vr].start;
+            edit.preferred_col = if (pos >= start) pos - start else 0;
+            return;
+        }
+    }
+    edit.preferred_col = colOf(text, pos);
+}
+
 pub fn moveLeft(edit: *Edit, text: []const u8, extend: bool, by_word: bool) void {
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
@@ -723,7 +745,6 @@ pub fn moveLeft(edit: *Edit, text: []const u8, extend: bool, by_word: bool) void
         }
         if (!extend) r.anchor = r.caret;
     }
-    edit.preferred_col = colOf(text, edit.carets[0].caret);
     edit.block = false;
 }
 
@@ -743,8 +764,85 @@ pub fn moveRight(edit: *Edit, text: []const u8, extend: bool, by_word: bool) voi
         }
         if (!extend) r.anchor = r.caret;
     }
-    edit.preferred_col = colOf(text, edit.carets[0].caret);
     edit.block = false;
+}
+
+/// Insert `indent` (e.g. two spaces) at the start of each hard line that has a caret,
+/// or at each caret if mid-line (soft indent). Shift+Tab removes leading indent.
+pub fn indentLines(edit: *Edit, buf: []u8, len: *usize, indent: []const u8, outdent: bool) bool {
+    if (indent.len == 0 and !outdent) return false;
+    edit.beforeMutate(buf, len.*, false);
+    const text = buf[0..len.*];
+    // Collect unique hard-line starts for carets (low→high)
+    var lines: [MaxCarets]usize = undefined;
+    var n_lines: usize = 0;
+    var i: usize = 0;
+    while (i < edit.caret_ct) : (i += 1) {
+        const ls = lineStart(text, edit.carets[i].lo());
+        var dup = false;
+        var j: usize = 0;
+        while (j < n_lines) : (j += 1) {
+            if (lines[j] == ls) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup and n_lines < MaxCarets) {
+            lines[n_lines] = ls;
+            n_lines += 1;
+        }
+    }
+    // Sort high→low for stable edits
+    var a: usize = 0;
+    while (a + 1 < n_lines) : (a += 1) {
+        var b = a + 1;
+        while (b < n_lines) : (b += 1) {
+            if (lines[b] > lines[a]) {
+                const t = lines[a];
+                lines[a] = lines[b];
+                lines[b] = t;
+            }
+        }
+    }
+    var changed = false;
+    i = 0;
+    while (i < n_lines) : (i += 1) {
+        const ls = lines[i];
+        if (outdent) {
+            // Remove up to indent.len leading spaces, or one leading tab
+            var rem: usize = 0;
+            while (ls + rem < len.* and rem < indent.len) : (rem += 1) {
+                const ch = buf[ls + rem];
+                if (ch != ' ' and ch != '\t') break;
+            }
+            if (rem == 0 and ls < len.* and buf[ls] == '\t') rem = 1;
+            if (rem > 0) {
+                deleteRange(buf, len, ls, ls + rem);
+                var j: usize = 0;
+                while (j < edit.caret_ct) : (j += 1) {
+                    var r = &edit.carets[j];
+                    if (r.caret >= ls + rem) r.caret -= rem else if (r.caret > ls) r.caret = ls;
+                    if (r.anchor >= ls + rem) r.anchor -= rem else if (r.anchor > ls) r.anchor = ls;
+                }
+                changed = true;
+            }
+        } else {
+            const n = insertAt(buf, len, ls, indent);
+            if (n > 0) {
+                var j: usize = 0;
+                while (j < edit.caret_ct) : (j += 1) {
+                    var r = &edit.carets[j];
+                    if (r.caret >= ls) r.caret += n;
+                    if (r.anchor >= ls) r.anchor += n;
+                }
+                changed = true;
+            }
+        }
+    }
+    edit.clampAll(len.*);
+    if (changed) mergeCarets(edit);
+    edit.block = false;
+    return changed;
 }
 
 /// First non-whitespace column on the hard line containing `pos`.
@@ -1470,11 +1568,13 @@ pub fn handleKeys(
 
     if (input.keyPressed(.left)) {
         moveLeft(edit, text, shift, ctrl);
+        updatePreferredCol(edit, text, font, font_size, wrap_px);
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.right)) {
         moveRight(edit, text, shift, ctrl);
+        updatePreferredCol(edit, text, font, font_size, wrap_px);
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
@@ -1505,6 +1605,13 @@ pub fn handleKeys(
     }
     if (input.keyPressed(.end)) {
         moveEnd(edit, text, shift, ctrl, font, font_size, wrap_px);
+        edit.coalesce_typing = false;
+        edit.ctrl_d_active = false;
+    }
+    // Tab / Shift+Tab: indent / outdent hard lines with carets (multi-line only).
+    // Caller sets Ui.consumed_tab so focus cycling skips this frame.
+    if (multiline and input.keyPressed(.tab) and !ctrl and !alt) {
+        changed = indentLines(edit, buf, len, "  ", shift) or changed;
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }

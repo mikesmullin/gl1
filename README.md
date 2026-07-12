@@ -134,6 +134,7 @@ Focused single-line (`textInput`) and multi-line (`textArea`) fields:
 | **Ctrl+Shift+drag** or **middle-drag** | Column / block selection (Alt+Shift+drag when WM allows; arrows grow block) |
 | **Ctrl+Backspace / Delete** | Delete previous / next word |
 | **Home** / **End** | Soft-wrap aware: visual line, then hard line (smart first non-ws) |
+| **Tab** / **Shift+Tab** | Indent / outdent (multi-line; two spaces) |
 | **Esc** | End multi-caret / Ctrl+D / block session (restore origin caret) |
 | **Enter** | Newline (multi-line) |
 | Soft wrap | Display-only; buffer keeps real newlines only |

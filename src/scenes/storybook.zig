@@ -470,7 +470,7 @@ pub fn frame(a: *app.App) void {
             u.separator();
             u.label(.{ .text = "Multi-line text area — soft wrap, multi-caret, column select, resize grip" });
             u.label(.{
-                .text = "Alt+Shift+↑/↓: add caret · Column select: Ctrl+Shift+drag or middle-drag (Alt often blocked by WM) · Ctrl+D: next match",
+                .text = "Alt+Shift+↑/↓: add caret · Alt+Shift+drag: column select · Tab/Shift+Tab: indent · Ctrl+D: next match",
                 .color = u.theme.text_dim,
             });
             _ = u.textArea(.{
