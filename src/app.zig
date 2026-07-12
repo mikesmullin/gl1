@@ -218,6 +218,7 @@ export fn frame() void {
 
     g.input.now = g.time;
     g.input.tickKeyRepeat();
+    g.input.refreshModifiers();
 
     // Scene transition tick (diamond wipe → swap → reveal).
     if (g.transition.tick(g.dt) == .swap) {

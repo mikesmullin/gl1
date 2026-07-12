@@ -46,6 +46,13 @@ pub const Key = enum {
     zero,
     /// Period / numpad decimal (Blender frame-selected).
     period,
+    /// Physical modifier keys (fallback when event.modifiers is stale on mouse events).
+    left_shift,
+    right_shift,
+    left_ctrl,
+    right_ctrl,
+    left_alt,
+    right_alt,
 };
 
 pub const MouseButton = enum { left, right, middle };
@@ -168,21 +175,49 @@ pub const Input = struct {
         return self.keys_pressed.get(k);
     }
 
+    /// Elevate sticky modifiers from physical modifier keys still held.
+    pub fn refreshModifiers(self: *Input) void {
+        if (self.keys_down.get(.left_shift) or self.keys_down.get(.right_shift)) self.shift = true;
+        if (self.keys_down.get(.left_ctrl) or self.keys_down.get(.right_ctrl)) self.ctrl = true;
+        if (self.keys_down.get(.left_alt) or self.keys_down.get(.right_alt)) self.alt = true;
+    }
+
+    /// OR modifier bits into sticky state (never clears a held modifier).
+    /// Clearing only happens on KEY_UP via `recomputeModifiersFromKeys`.
+    ///
+    /// Why: some KEY_DOWN events (e.g. Shift while Alt is held) and most mouse
+    /// events report incomplete modifier bitfields. If we assigned
+    /// `alt = bitfield` on those, Alt would drop and Alt+Shift+click would
+    /// become Shift-only stream select — while Alt+Shift+arrow still worked
+    /// (arrow KEY_DOWN carries the full bitfield).
+    fn elevateModifierBits(self: *Input, mods: u32) void {
+        if ((mods & sapp.modifier_shift) != 0) self.shift = true;
+        if ((mods & sapp.modifier_ctrl) != 0) self.ctrl = true;
+        if ((mods & sapp.modifier_alt) != 0) self.alt = true;
+        if ((mods & sapp.modifier_super) != 0) self.super = true;
+        self.refreshModifiers();
+    }
+
+    fn recomputeModifiersFromKeys(self: *Input, mods: u32) void {
+        self.shift = (mods & sapp.modifier_shift) != 0 or self.keys_down.get(.left_shift) or self.keys_down.get(.right_shift);
+        self.ctrl = (mods & sapp.modifier_ctrl) != 0 or self.keys_down.get(.left_ctrl) or self.keys_down.get(.right_ctrl);
+        self.alt = (mods & sapp.modifier_alt) != 0 or self.keys_down.get(.left_alt) or self.keys_down.get(.right_alt);
+        self.super = (mods & sapp.modifier_super) != 0;
+    }
+
     pub fn handleEvent(self: *Input, ev: [*c]const sapp.Event) void {
         const e = ev.*;
-        self.shift = (e.modifiers & sapp.modifier_shift) != 0;
-        self.ctrl = (e.modifiers & sapp.modifier_ctrl) != 0;
-        self.alt = (e.modifiers & sapp.modifier_alt) != 0;
-        self.super = (e.modifiers & sapp.modifier_super) != 0;
 
         switch (e.type) {
             .MOUSE_MOVE => {
+                self.elevateModifierBits(e.modifiers);
                 self.mouse_dx += e.mouse_dx;
                 self.mouse_dy += e.mouse_dy;
                 self.mouse_x = e.mouse_x;
                 self.mouse_y = e.mouse_y;
             },
             .MOUSE_DOWN => {
+                self.elevateModifierBits(e.modifiers);
                 if (mapMouse(e.mouse_button)) |bi| {
                     self.mouse_down[bi] = true;
                     self.mouse_pressed[bi] = true;
@@ -191,22 +226,34 @@ pub const Input = struct {
                 self.mouse_y = e.mouse_y;
             },
             .MOUSE_UP => {
+                self.elevateModifierBits(e.modifiers);
                 if (mapMouse(e.mouse_button)) |bi| {
                     self.mouse_down[bi] = false;
                     self.mouse_released[bi] = true;
                 }
             },
             .MOUSE_SCROLL => {
+                self.elevateModifierBits(e.modifiers);
                 self.scroll_y += e.scroll_y;
             },
             .KEY_DOWN => {
+                // Elevate only — never clear Alt when Shift's KEY_DOWN omits the Alt bit.
+                self.elevateModifierBits(e.modifiers);
                 if (mapKey(e.key_code)) |k| {
-                    if (!e.key_repeat) {
+                    const was_down = self.keys_down.get(k);
+                    if (!e.key_repeat or !was_down) {
                         self.keys_pressed.set(k, true);
-                        // First software repeat after delay (sapp may also auto-repeat; we gate CHAR separately).
                         self.key_repeat_at.set(k, self.now + config.key_repeat_delay_s);
                     }
                     self.keys_down.set(k, true);
+                    // Modifier keycodes themselves force the sticky flag.
+                    switch (k) {
+                        .left_shift, .right_shift => self.shift = true,
+                        .left_ctrl, .right_ctrl => self.ctrl = true,
+                        .left_alt, .right_alt => self.alt = true,
+                        else => {},
+                    }
+                    self.refreshModifiers();
                 }
             },
             .KEY_UP => {
@@ -215,8 +262,11 @@ pub const Input = struct {
                     self.keys_released.set(k, true);
                     self.key_repeat_at.set(k, -1);
                 }
+                // Only KEY_UP fully recomputes (clears released modifiers).
+                self.recomputeModifiersFromKeys(e.modifiers);
             },
             .CHAR => {
+                self.elevateModifierBits(e.modifiers);
                 // Never type into fields while Ctrl/Alt/Super held (blocks Ctrl+P leaking 'p').
                 if (self.ctrl or self.alt or self.super) return;
                 if (e.char_code >= 32 and e.char_code < 127) {
@@ -293,6 +343,12 @@ pub const Input = struct {
             .KP_0 => .zero,
             .PERIOD => .period,
             .KP_DECIMAL => .period,
+            .LEFT_SHIFT => .left_shift,
+            .RIGHT_SHIFT => .right_shift,
+            .LEFT_CONTROL => .left_ctrl,
+            .RIGHT_CONTROL => .right_ctrl,
+            .LEFT_ALT => .left_alt,
+            .RIGHT_ALT => .right_alt,
             else => null,
         };
     }

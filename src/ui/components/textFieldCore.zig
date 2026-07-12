@@ -16,8 +16,19 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     // Content width inside padding (6px left + ~6px right). Soft wrap is display-only.
     const wrap_px: f32 = if (opts.multiline) @max(0, box.w - 12) else 0;
 
+    // Refresh modifiers every interaction — mouse events often omit Alt on Linux.
+    ui.input.refreshModifiers();
+    const alt = ui.input.alt;
+    const shift = ui.input.shift;
+    const ctrl = ui.input.ctrl;
+    const middle_down = ui.input.mouseDown(.middle);
+    const left_press = ui.input.mousePressed(.left);
+    const mid_press = ui.input.mousePressed(.middle);
+    const over = box.contains(ui.input.mouse_x, ui.input.mouse_y);
+
     // Only on press — never on release (`st.clicked`), so multi-click counting stays correct.
-    if (ui.input.mousePressed(.left) and box.contains(ui.input.mouse_x, ui.input.mouse_y)) {
+    // Middle-click also starts a block selection on multi-line (no modifiers needed).
+    if ((left_press or mid_press) and over) {
         ui.focus = i;
         const ox = box.x + 6;
         const oy = box.y + 4 - opts.scroll_y;
@@ -33,14 +44,17 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
             opts.multiline,
             wrap_px,
             ui.time,
-            ui.input.alt,
-            ui.input.shift,
+            alt,
+            shift,
+            ctrl,
+            mid_press or (middle_down and left_press),
         );
     }
     const focused = ui.focus.a == opts.id_key;
     // I-beam over text content (single-line and multi-line).
     if (st.hot or focused) ui.setSoftCursor(.cursor_text);
-    if (focused and ui.input.mouseDown(.left) and ed.dragging) {
+    const dragging_btn = ui.input.mouseDown(.left) or ui.input.mouseDown(.middle);
+    if (focused and dragging_btn and ed.dragging) {
         const ox = box.x + 6;
         const oy = box.y + 4 - opts.scroll_y;
         te.handleMouseDrag(
@@ -54,9 +68,13 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
             ui.input.mouse_y,
             opts.multiline,
             wrap_px,
+            alt,
+            shift,
+            ctrl,
+            middle_down,
         );
     }
-    if (ui.input.mouseReleased(.left)) te.handleMouseUp(ed);
+    if (ui.input.mouseReleased(.left) or ui.input.mouseReleased(.middle)) te.handleMouseUp(ed);
 
     ui.drawRectBorder(box, ui.theme.input_bg, if (focused) ui.theme.accent else ui.theme.panel_border, 1);
 

@@ -356,10 +356,10 @@ pub const Ui = struct {
             // Leave mouse_down true so holding still works after arm — only pressed edge swallowed.
         }
 
-        // Text focus: drop on any LMB press that reaches the UI. Fields that are
+        // Text focus: drop on any LMB/MMB press that reaches the UI. Fields that are
         // hit this frame re-claim focus when they run. Clicking empty canvas /
         // buttons / panels clears the active text field so hotkeys work again.
-        if (input.mousePressed(.left)) {
+        if (input.mousePressed(.left) or input.mousePressed(.middle)) {
             self.focus = .{};
         }
 

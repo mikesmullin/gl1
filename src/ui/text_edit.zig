@@ -391,7 +391,11 @@ pub fn deleteSelections(edit: *Edit, buf: []u8, len: *usize) bool {
 /// so simultaneous multi-caret typing stays in order (not reversed).
 pub fn insertText(edit: *Edit, buf: []u8, len: *usize, bytes: []const u8) bool {
     var changed = deleteSelections(edit, buf, len);
-    if (bytes.len == 0) return changed;
+    if (bytes.len == 0) {
+        if (changed) mergeCarets(edit);
+        edit.block = false;
+        return changed;
+    }
 
     var order: [MaxCarets]usize = undefined;
     sortCaretsBy(edit, &order, false);
@@ -411,6 +415,8 @@ pub fn insertText(edit: *Edit, buf: []u8, len: *usize, bytes: []const u8) bool {
         }
     }
     edit.clampAll(len.*);
+    if (changed) mergeCarets(edit);
+    edit.block = false;
     return changed;
 }
 
@@ -741,25 +747,115 @@ pub fn moveRight(edit: *Edit, text: []const u8, extend: bool, by_word: bool) voi
     edit.block = false;
 }
 
-pub fn moveHome(edit: *Edit, text: []const u8, extend: bool, doc: bool) void {
+/// First non-whitespace column on the hard line containing `pos`.
+pub fn firstNonWs(text: []const u8, pos: usize) usize {
+    const ls = lineStart(text, pos);
+    const le = lineEnd(text, pos);
+    var i = ls;
+    while (i < le and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    return i;
+}
+
+/// Soft-wrap-aware Home. Cycles: visual-row start → hard-line first non-ws → hard-line start.
+pub fn moveHome(
+    edit: *Edit,
+    text: []const u8,
+    extend: bool,
+    doc: bool,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    const rows: []const VisualRow = if (!doc and font != null and wrap_px >= 16) blk: {
+        const n = layoutSoft(text, font.?, size, wrap_px, rows_buf[0..]);
+        break :blk rows_buf[0..n];
+    } else rows_buf[0..0];
+
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         var r = &edit.carets[i];
-        r.caret = if (doc) 0 else lineStart(text, r.caret);
+        if (doc) {
+            r.caret = 0;
+        } else if (rows.len > 0) {
+            const vr = visualRowOf(rows, r.caret);
+            const vis_start = rows[vr].start;
+            const hard_start = lineStart(text, r.caret);
+            const soft = firstNonWs(text, r.caret);
+            if (r.caret > vis_start) {
+                // 1) Front of current soft-wrapped display line
+                r.caret = vis_start;
+            } else if (vis_start > soft and r.caret > soft) {
+                // 2) First non-whitespace of the hard line
+                r.caret = soft;
+            } else if (r.caret > hard_start) {
+                // 3) Absolute hard-line start
+                r.caret = hard_start;
+            } else {
+                r.caret = hard_start;
+            }
+        } else {
+            // No soft wrap: smart Home (first non-ws ↔ line start)
+            const ls = lineStart(text, r.caret);
+            const soft = firstNonWs(text, r.caret);
+            if (r.caret == soft or soft == ls) {
+                r.caret = ls;
+            } else {
+                r.caret = soft;
+            }
+        }
         if (!extend) r.anchor = r.caret;
     }
-    edit.preferred_col = 0;
+    if (rows.len > 0) {
+        const vr = visualRowOf(rows, edit.carets[0].caret);
+        edit.preferred_col = edit.carets[0].caret - rows[vr].start;
+    } else {
+        edit.preferred_col = colOf(text, edit.carets[0].caret);
+    }
     edit.block = false;
 }
 
-pub fn moveEnd(edit: *Edit, text: []const u8, extend: bool, doc: bool) void {
+/// Soft-wrap-aware End: end of visual row, then end of hard line.
+pub fn moveEnd(
+    edit: *Edit,
+    text: []const u8,
+    extend: bool,
+    doc: bool,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    const rows: []const VisualRow = if (!doc and font != null and wrap_px >= 16) blk: {
+        const n = layoutSoft(text, font.?, size, wrap_px, rows_buf[0..]);
+        break :blk rows_buf[0..n];
+    } else rows_buf[0..0];
+
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
         var r = &edit.carets[i];
-        r.caret = if (doc) text.len else lineEnd(text, r.caret);
+        if (doc) {
+            r.caret = text.len;
+        } else if (rows.len > 0) {
+            const vr = visualRowOf(rows, r.caret);
+            const vis_end = rows[vr].end;
+            const hard_end = lineEnd(text, r.caret);
+            if (r.caret < vis_end) {
+                r.caret = vis_end;
+            } else {
+                r.caret = hard_end;
+            }
+        } else {
+            r.caret = lineEnd(text, r.caret);
+        }
         if (!extend) r.anchor = r.caret;
     }
-    edit.preferred_col = colOf(text, edit.carets[0].caret);
+    if (rows.len > 0) {
+        const vr = visualRowOf(rows, edit.carets[0].caret);
+        edit.preferred_col = edit.carets[0].caret - rows[vr].start;
+    } else {
+        edit.preferred_col = colOf(text, edit.carets[0].caret);
+    }
     edit.block = false;
 }
 
@@ -1053,17 +1149,214 @@ pub fn selectAllOccurrences(edit: *Edit, text: []const u8) void {
     edit.ctrl_d_active = true;
 }
 
-fn copyText(edit: *Edit, text: []const u8, multiline: bool) []const u8 {
-    const p = edit.carets[0];
-    if (p.hasSel()) {
-        return text[p.lo()..p.hi()];
+/// Build clipboard payload into `out` (max out.len). Multi-caret selections joined by `\n`.
+pub fn formatCopy(edit: *const Edit, text: []const u8, multiline: bool, out: []u8) []const u8 {
+    var any_sel = false;
+    var i: usize = 0;
+    while (i < edit.caret_ct) : (i += 1) {
+        if (edit.carets[i].hasSel()) {
+            any_sel = true;
+            break;
+        }
     }
+    if (any_sel) {
+        // Stable order: low→high by lo()
+        var order: [MaxCarets]usize = undefined;
+        var n: usize = 0;
+        i = 0;
+        while (i < edit.caret_ct) : (i += 1) {
+            if (edit.carets[i].hasSel()) {
+                order[n] = i;
+                n += 1;
+            }
+        }
+        // insertion sort by lo
+        var a: usize = 1;
+        while (a < n) : (a += 1) {
+            var b = a;
+            while (b > 0 and edit.carets[order[b]].lo() < edit.carets[order[b - 1]].lo()) {
+                const tmp = order[b];
+                order[b] = order[b - 1];
+                order[b - 1] = tmp;
+                b -= 1;
+            }
+        }
+        var used: usize = 0;
+        var k: usize = 0;
+        while (k < n) : (k += 1) {
+            if (k > 0 and used < out.len) {
+                out[used] = '\n';
+                used += 1;
+            }
+            const r = edit.carets[order[k]];
+            const slice = text[r.lo()..r.hi()];
+            const take = @min(slice.len, out.len -| used);
+            @memcpy(out[used .. used + take], slice[0..take]);
+            used += take;
+        }
+        return out[0..used];
+    }
+    const p = edit.carets[0];
     // Nothing selected → current line (or whole buffer for single-line)
-    if (!multiline) return text;
+    if (!multiline) {
+        const take = @min(text.len, out.len);
+        @memcpy(out[0..take], text[0..take]);
+        return out[0..take];
+    }
     const ls = lineStart(text, p.caret);
     var le = lineEnd(text, p.caret);
     if (le < text.len and text[le] == '\n') le += 1;
-    return text[ls..le];
+    const slice = text[ls..le];
+    const take = @min(slice.len, out.len);
+    @memcpy(out[0..take], slice[0..take]);
+    return out[0..take];
+}
+
+/// Visual (soft-wrap) row + column for block selection. Falls back to hard lines.
+pub fn blockRowCol(
+    text: []const u8,
+    pos: usize,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) struct { row: usize, col: usize } {
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    if (font) |f| {
+        const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+        if (n > 0) {
+            const vr = visualRowOf(rows_buf[0..n], pos);
+            const start = rows_buf[vr].start;
+            const col: usize = if (pos >= start) pos - start else 0;
+            return .{ .row = vr, .col = col };
+        }
+    }
+    return .{ .row = rowOf(text, pos), .col = colOf(text, pos) };
+}
+
+/// Materialize `block_*` rectangle into one selection/caret per **visual** row
+/// (soft-wrap aware — Notes is often one hard line with many display rows).
+pub fn syncBlockCarets(
+    edit: *Edit,
+    text: []const u8,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    if (!edit.block) return;
+    const r0 = @min(edit.block_row0, edit.block_row1);
+    const r1 = @max(edit.block_row0, edit.block_row1);
+    const c0 = @min(edit.block_col0, edit.block_col1);
+    const c1 = @max(edit.block_col0, edit.block_col1);
+
+    var rows_buf: [MaxSoftRows]VisualRow = undefined;
+    var n_rows: usize = 0;
+    if (font) |f| {
+        n_rows = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+    }
+
+    edit.caret_ct = 0;
+    if (n_rows > 0) {
+        var row = r0;
+        while (row <= r1 and row < n_rows and edit.caret_ct < MaxCarets) : (row += 1) {
+            const vr = rows_buf[row];
+            const line_len = vr.end - vr.start;
+            const a = vr.start + @min(c0, line_len);
+            const b = vr.start + @min(c1, line_len);
+            if (c0 == c1) {
+                edit.carets[edit.caret_ct] = .{ .caret = a, .anchor = a };
+            } else if (edit.block_col1 >= edit.block_col0) {
+                edit.carets[edit.caret_ct] = .{ .anchor = a, .caret = b };
+            } else {
+                edit.carets[edit.caret_ct] = .{ .anchor = b, .caret = a };
+            }
+            edit.caret_ct += 1;
+        }
+    } else {
+        // Hard-line fallback (no font)
+        var max_row: usize = 0;
+        if (text.len > 0) max_row = rowOf(text, text.len);
+        var row = r0;
+        while (row <= r1 and row <= max_row and edit.caret_ct < MaxCarets) : (row += 1) {
+            const ls = posAtRowCol(text, row, 0);
+            const le = lineEnd(text, ls);
+            const line_len = le - ls;
+            const a = ls + @min(c0, line_len);
+            const b = ls + @min(c1, line_len);
+            if (c0 == c1) {
+                edit.carets[edit.caret_ct] = .{ .caret = a, .anchor = a };
+            } else if (edit.block_col1 >= edit.block_col0) {
+                edit.carets[edit.caret_ct] = .{ .anchor = a, .caret = b };
+            } else {
+                edit.carets[edit.caret_ct] = .{ .anchor = b, .caret = a };
+            }
+            edit.caret_ct += 1;
+        }
+    }
+    if (edit.caret_ct == 0) {
+        edit.caret_ct = 1;
+        edit.carets[0] = .{};
+    }
+    edit.preferred_col = c1;
+}
+
+/// Extend block selection vertically by `delta_rows` (usually ±1).
+pub fn extendBlockVert(
+    edit: *Edit,
+    text: []const u8,
+    delta_rows: i32,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    if (!edit.block) {
+        const p = edit.carets[0].caret;
+        const rc = blockRowCol(text, p, font, size, wrap_px);
+        edit.block = true;
+        edit.block_row0 = rc.row;
+        edit.block_row1 = rc.row;
+        edit.block_col0 = rc.col;
+        edit.block_col1 = rc.col;
+    }
+    if (delta_rows < 0) {
+        if (edit.block_row1 > 0) edit.block_row1 -= 1;
+    } else if (delta_rows > 0) {
+        var max_row: usize = 0;
+        if (font) |f| {
+            var rows_buf: [MaxSoftRows]VisualRow = undefined;
+            const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+            max_row = if (n == 0) 0 else n - 1;
+        } else if (text.len > 0) {
+            max_row = rowOf(text, text.len);
+        }
+        if (edit.block_row1 < max_row) edit.block_row1 += 1;
+    }
+    syncBlockCarets(edit, text, font, size, wrap_px);
+}
+
+/// Extend block selection horizontally by `delta_cols`.
+pub fn extendBlockHoriz(
+    edit: *Edit,
+    text: []const u8,
+    delta_cols: i32,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    if (!edit.block) {
+        const p = edit.carets[0].caret;
+        const rc = blockRowCol(text, p, font, size, wrap_px);
+        edit.block = true;
+        edit.block_row0 = rc.row;
+        edit.block_row1 = rc.row;
+        edit.block_col0 = rc.col;
+        edit.block_col1 = rc.col;
+    }
+    if (delta_cols < 0) {
+        if (edit.block_col1 > 0) edit.block_col1 -= 1;
+    } else if (delta_cols > 0) {
+        edit.block_col1 += 1;
+    }
+    syncBlockCarets(edit, text, font, size, wrap_px);
 }
 
 /// Handle keyboard for an edit session. Only call when field is focused.
@@ -1092,15 +1385,22 @@ pub fn handleKeys(
         return false;
     }
     if (ctrl and input.keyPressed(.c)) {
-        input.requestCopy(copyText(edit, text, multiline));
+        var cbuf: [1024]u8 = undefined;
+        input.requestCopy(formatCopy(edit, text, multiline, cbuf[0..]));
         return false;
     }
     if (ctrl and input.keyPressed(.x)) {
-        const slice = copyText(edit, text, multiline);
-        input.requestCopy(slice);
+        var cbuf: [1024]u8 = undefined;
+        input.requestCopy(formatCopy(edit, text, multiline, cbuf[0..]));
         edit.beforeMutate(buf, len.*, false);
-        if (edit.carets[0].hasSel()) {
+        var any_sel = false;
+        var si: usize = 0;
+        while (si < edit.caret_ct) : (si += 1) {
+            if (edit.carets[si].hasSel()) any_sel = true;
+        }
+        if (any_sel) {
             changed = deleteSelections(edit, buf, len) or changed;
+            edit.block = false;
         } else if (multiline) {
             // cut line
             const ls = lineStart(text, edit.carets[0].caret);
@@ -1139,6 +1439,35 @@ pub fn handleKeys(
         return false;
     }
 
+    // While already in column/block mode, arrows grow/shrink the rectangle.
+    // (Start block with Alt+Shift+drag or Ctrl+Alt+drag — mouse.)
+    if (multiline and edit.block) {
+        if (input.keyPressed(.left)) {
+            extendBlockHoriz(edit, text, -1, font, font_size, wrap_px);
+            edit.coalesce_typing = false;
+            edit.clampAll(len.*);
+            return false;
+        }
+        if (input.keyPressed(.right)) {
+            extendBlockHoriz(edit, text, 1, font, font_size, wrap_px);
+            edit.coalesce_typing = false;
+            edit.clampAll(len.*);
+            return false;
+        }
+        if (input.keyPressed(.up)) {
+            extendBlockVert(edit, text, -1, font, font_size, wrap_px);
+            edit.coalesce_typing = false;
+            edit.clampAll(len.*);
+            return false;
+        }
+        if (input.keyPressed(.down)) {
+            extendBlockVert(edit, text, 1, font, font_size, wrap_px);
+            edit.coalesce_typing = false;
+            edit.clampAll(len.*);
+            return false;
+        }
+    }
+
     if (input.keyPressed(.left)) {
         moveLeft(edit, text, shift, ctrl);
         edit.coalesce_typing = false;
@@ -1149,7 +1478,7 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
-    // Add Cursor Above/Below: Alt+Shift+↑/↓ or Ctrl+Alt+↑/↓ (VS Code-ish).
+    // Add Cursor Above/Below: Alt+Shift+↑/↓ or Ctrl+Alt+↑/↓.
     const add_cursor_vert = (alt and shift) or (ctrl and alt);
     if (multiline and input.keyPressed(.up)) {
         if (add_cursor_vert) {
@@ -1170,12 +1499,12 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
     }
     if (input.keyPressed(.home)) {
-        moveHome(edit, text, shift, ctrl);
+        moveHome(edit, text, shift, ctrl, font, font_size, wrap_px);
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
     if (input.keyPressed(.end)) {
-        moveEnd(edit, text, shift, ctrl);
+        moveEnd(edit, text, shift, ctrl, font, font_size, wrap_px);
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
@@ -1197,10 +1526,14 @@ pub fn handleKeys(
         }
         edit.coalesce_typing = false;
     }
-    // Ctrl+D works on single- and multi-line
-    if (ctrl and input.keyPressed(.d)) {
+    // Ctrl+D works on single- and multi-line (also accept key-down edge via keys_down
+    // if the platform tags the KEY_DOWN as a repeat).
+    if (ctrl and !shift and !alt and input.keyPressed(.d)) {
         ctrlD(edit, buf[0..len.*]);
         edit.coalesce_typing = false;
+        edit.block = false;
+        edit.clampAll(len.*);
+        return false;
     }
     // Enter → hard line break at every caret (including mid-line)
     if (multiline and input.keyPressed(.enter)) {
@@ -1256,6 +1589,37 @@ pub fn handleKeys(
 
 /// Mouse down — only call on mousePressed (not release/clicked).
 /// 1st click: place caret · 2nd (within multi_click_s, same area): word · 3rd: line
+/// True when the chord means column/block select (not stream select).
+/// Prefer **Ctrl+Shift** — Alt is often eaten by Linux WMs on mouse events.
+/// Also accept Alt+Shift / Ctrl+Alt when the platform reports them, and middle-mouse.
+pub fn isBlockChord(alt: bool, shift: bool, ctrl: bool, middle: bool) bool {
+    if (middle) return true;
+    if (ctrl and shift and !alt) return true; // primary (reliable)
+    if (alt and shift) return true;
+    if (ctrl and alt) return true;
+    return false;
+}
+
+pub fn beginBlockAt(
+    edit: *Edit,
+    text: []const u8,
+    pos: usize,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) void {
+    const rc = blockRowCol(text, pos, font, size, wrap_px);
+    edit.block = true;
+    edit.block_row0 = rc.row;
+    edit.block_row1 = rc.row;
+    edit.block_col0 = rc.col;
+    edit.block_col1 = rc.col;
+    edit.dragging = true;
+    edit.ctrl_d_active = false;
+    edit.click_count = 1;
+    syncBlockCarets(edit, text, font, size, wrap_px);
+}
+
 pub fn handleMouseDown(
     edit: *Edit,
     text: []const u8,
@@ -1270,8 +1634,11 @@ pub fn handleMouseDown(
     now: f64,
     alt: bool,
     shift: bool,
+    ctrl: bool,
+    middle: bool,
 ) void {
     const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline, wrap_px);
+    // Prefer hard-line row/col for block mode; soft-wrap visual col for preferred_col later.
     const row = rowOf(text, pos);
     const col = colOf(text, pos);
 
@@ -1290,20 +1657,14 @@ pub fn handleMouseDown(
     edit.coalesce_typing = false;
     edit.ctrl_d_active = false;
 
-    if (alt and shift and multiline) {
-        edit.block = true;
-        edit.block_row0 = row;
-        edit.block_row1 = row;
-        edit.block_col0 = col;
-        edit.block_col1 = col;
-        edit.carets[0] = .{ .caret = pos, .anchor = pos };
-        edit.caret_ct = 1;
-        edit.dragging = true;
+    // Column/block select (see isBlockChord — Ctrl+Shift or middle mouse preferred).
+    if (multiline and isBlockChord(alt, shift, ctrl, middle)) {
+        beginBlockAt(edit, text, pos, font, size, wrap_px);
         return;
     }
 
-    // Alt+click: add secondary caret (VS Code / JetBrains style)
-    if (alt and !shift and multiline) {
+    // Alt+click (no Shift/Ctrl): add secondary caret (VS Code / JetBrains style)
+    if (alt and !shift and !ctrl and multiline) {
         if (edit.caret_ct == 1 and !edit.ctrl_d_active) {
             edit.ctrl_d_origin = edit.carets[0].caret;
         }
@@ -1329,7 +1690,7 @@ pub fn handleMouseDown(
         edit.dragging = true;
     } else {
         // click 1: place caret (or shift-extend)
-        if (shift) {
+        if (shift and !ctrl) {
             edit.carets[0].caret = pos;
             edit.caret_ct = 1;
         } else {
@@ -1353,13 +1714,33 @@ pub fn handleMouseDrag(
     my: f32,
     multiline: bool,
     wrap_px: f32,
+    alt: bool,
+    shift: bool,
+    ctrl: bool,
+    middle: bool,
 ) void {
     if (!edit.dragging) return;
     const pos = posFromPoint(text, font, size, origin_x, origin_y, mx, my, multiline, wrap_px);
+
+    // Enter block mode mid-drag if the chord becomes held (or middle is held).
+    if (multiline and !edit.block and isBlockChord(alt, shift, ctrl, middle)) {
+        const anchor_pos = edit.carets[0].anchor;
+        const a = blockRowCol(text, anchor_pos, font, size, wrap_px);
+        const b = blockRowCol(text, pos, font, size, wrap_px);
+        edit.block = true;
+        edit.block_row0 = a.row;
+        edit.block_col0 = a.col;
+        edit.block_row1 = b.row;
+        edit.block_col1 = b.col;
+        syncBlockCarets(edit, text, font, size, wrap_px);
+        return;
+    }
+
     if (edit.block and multiline) {
-        edit.block_row1 = rowOf(text, pos);
-        edit.block_col1 = colOf(text, pos);
-        edit.carets[0].caret = pos;
+        const b = blockRowCol(text, pos, font, size, wrap_px);
+        edit.block_row1 = b.row;
+        edit.block_col1 = b.col;
+        syncBlockCarets(edit, text, font, size, wrap_px);
         return;
     }
     // Double-click drag: expand by whole words from the original click seed.
@@ -1396,6 +1777,7 @@ pub fn handleMouseDrag(
 
 pub fn handleMouseUp(edit: *Edit) void {
     edit.dragging = false;
+    // Leave `block` true so Alt+Shift+arrows can extend the rectangle.
 }
 
 // --- tests ------------------------------------------------------------------
@@ -1516,4 +1898,61 @@ test "alt-shift add caret above/below and Esc restores" {
     try std.testing.expectEqual(@as(usize, 1), edit.caret_ct);
     try std.testing.expectEqual(z_pos, edit.carets[0].caret);
     try std.testing.expect(!edit.carets[0].hasSel());
+}
+
+test "block select materializes one caret per line" {
+    const text = "abcde\nfghij\nklmno";
+    var edit: Edit = .{};
+    edit.block = true;
+    edit.block_row0 = 0;
+    edit.block_row1 = 2;
+    edit.block_col0 = 1;
+    edit.block_col1 = 3;
+    syncBlockCarets(&edit, text, null, 1, 0);
+    try std.testing.expectEqual(@as(usize, 3), edit.caret_ct);
+    // line0 "bc", line1 "gh", line2 "lm"
+    try std.testing.expectEqual(@as(usize, 1), edit.carets[0].lo());
+    try std.testing.expectEqual(@as(usize, 3), edit.carets[0].hi());
+    try std.testing.expectEqual(@as(usize, 7), edit.carets[1].lo());
+    try std.testing.expectEqual(@as(usize, 9), edit.carets[1].hi());
+    try std.testing.expectEqual(@as(usize, 13), edit.carets[2].lo());
+    try std.testing.expectEqual(@as(usize, 15), edit.carets[2].hi());
+}
+
+test "block type replaces rectangular region" {
+    var buf: [64]u8 = undefined;
+    const src = "abcde\nfghij\nklmno";
+    @memcpy(buf[0..src.len], src);
+    var len: usize = src.len;
+    var edit: Edit = .{};
+    edit.block = true;
+    edit.block_row0 = 0;
+    edit.block_row1 = 2;
+    edit.block_col0 = 1;
+    edit.block_col1 = 3;
+    syncBlockCarets(&edit, buf[0..len], null, 1, 0);
+    try std.testing.expect(insertText(&edit, &buf, &len, "XX"));
+    try std.testing.expectEqualStrings("aXXde\nfXXij\nkXXno", buf[0..len]);
+    try std.testing.expect(!edit.block);
+}
+
+test "formatCopy joins multi-caret selections" {
+    const text = "aa bb\ncc dd";
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .anchor = 0, .caret = 2 }; // aa
+    edit.carets[1] = .{ .anchor = 6, .caret = 8 }; // cc
+    edit.caret_ct = 2;
+    var out: [64]u8 = undefined;
+    const got = formatCopy(&edit, text, true, out[0..]);
+    try std.testing.expectEqualStrings("aa\ncc", got);
+}
+
+test "smart home first non-ws (no wrap)" {
+    const text = "  hello";
+    var edit: Edit = .{};
+    edit.carets[0] = .{ .caret = 5, .anchor = 5 }; // inside hello
+    moveHome(&edit, text, false, false, null, 1, 0);
+    try std.testing.expectEqual(@as(usize, 2), edit.carets[0].caret);
+    moveHome(&edit, text, false, false, null, 1, 0);
+    try std.testing.expectEqual(@as(usize, 0), edit.carets[0].caret);
 }

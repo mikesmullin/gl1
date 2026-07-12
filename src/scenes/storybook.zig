@@ -113,7 +113,7 @@ pub fn frame(a: *app.App) void {
             var buf: [32]u8 = undefined;
             u.label(.{ .text = std.fmt.bufPrint(&buf, "clicks={d}", .{st.clicks}) catch "", .color = u.theme.text_dim });
         } else if (eq(tab, "Checkbox")) {
-            u.label(.{ .text = "Checkboxes — independent multi-select (contrast with Radio)" });
+            u.label(.{ .text = "Checkbox — independent multi-select (contrast with Radio)" });
             _ = u.checkbox(.{ .id = "sb_chk_a", .label = "Enable notifications", .value = &st.checked });
             _ = u.checkbox(.{ .id = "sb_chk_b", .label = "Auto-save drafts", .value = &st.checked_b });
             _ = u.checkbox(.{ .id = "sb_chk_c", .label = "Show grid lines", .value = &st.checked_c });
@@ -128,7 +128,7 @@ pub fn frame(a: *app.App) void {
                 .color = u.theme.text_dim,
             });
         } else if (eq(tab, "Collapsible")) {
-            u.label(.{ .text = "Collapsible sections" });
+            u.label(.{ .text = "Collapsible — expandable section headers" });
             if (u.beginCollapsible(.{ .id = "c1", .title = "Section A", .open = &st.collab_a })) {
                 defer u.endCollapsible(true);
                 u.label(.{ .text = "Hidden until expanded." });
@@ -149,7 +149,7 @@ pub fn frame(a: *app.App) void {
                 u.toast(std.fmt.bufPrint(&b, "chose {d}", .{c}) catch "chose", .info, 1.5);
             }
         } else if (eq(tab, "Dropdown")) {
-            u.label(.{ .text = "Dropdown / select" });
+            u.label(.{ .text = "Dropdown — single-select menu (click or caret)" });
             const dd_items = [_][]const u8{ "Apple", "Banana", "Cherry", "Date" };
             _ = u.dropdown(.{
                 .id = "dd",
@@ -454,7 +454,7 @@ pub fn frame(a: *app.App) void {
                 .max = total_w - 80,
             });
         } else if (eq(tab, "Tabs")) {
-            u.label(.{ .text = "Tabs" });
+            u.label(.{ .text = "Tabs — horizontal page switcher" });
             const tab_items = [_][]const u8{ "General", "Graphics", "Audio" };
             _ = u.tabs(.{ .id = "tabs", .items = &tab_items, .selected = &st.tab_sel });
             u.separator();
@@ -464,11 +464,15 @@ pub fn frame(a: *app.App) void {
                 else => u.label(.{ .text = "Audio settings placeholder" }),
             }
         } else if (eq(tab, "TextInput")) {
-            u.label(.{ .text = "Single-line text input" });
+            u.label(.{ .text = "Single-line text input — caret, select, clipboard, undo" });
             _ = u.textInput(.{ .id = "sb_ti", .label = "Value", .buf = &st.text_buf, .len = &st.text_len, .w = 280 });
             u.label(.{ .text = st.text_buf[0..st.text_len], .color = u.theme.accent });
             u.separator();
-            u.label(.{ .text = "Multi-line text area (soft wrap, multi-caret, resize grip)" });
+            u.label(.{ .text = "Multi-line text area — soft wrap, multi-caret, column select, resize grip" });
+            u.label(.{
+                .text = "Alt+Shift+↑/↓: add caret · Column select: Ctrl+Shift+drag or middle-drag (Alt often blocked by WM) · Ctrl+D: next match",
+                .color = u.theme.text_dim,
+            });
             _ = u.textArea(.{
                 .id = "sb_notes",
                 .label = "Notes",
@@ -501,16 +505,16 @@ pub fn frame(a: *app.App) void {
                 cx += cell_w;
             }
         } else if (eq(tab, "Toast")) {
-            u.label(.{ .text = "Toast notifications" });
+            u.label(.{ .text = "Toast — transient corner notifications" });
             if (u.button(.{ .id = "t_ok", .label = "OK toast" })) u.toast("All good", .ok, 2);
             if (u.button(.{ .id = "t_info", .label = "Info toast" })) u.toast("FYI message", .info, 2);
             if (u.button(.{ .id = "t_warn", .label = "Warn toast" })) u.toast("Watch out", .warn, 2);
             if (u.button(.{ .id = "t_err", .label = "Error toast" })) u.toast("Something failed", .err, 2);
         } else if (eq(tab, "Toggle")) {
-            u.label(.{ .text = "Toggle switch" });
+            u.label(.{ .text = "Toggle — binary switch control" });
             _ = u.toggle(.{ .id = "tog", .label = "Notifications", .value = &st.toggled });
         } else if (eq(tab, "Tree")) {
-            u.label(.{ .text = "Tree nodes — click the row (arrow or label) to expand" });
+            u.label(.{ .text = "Tree — hierarchical nodes; click row to expand/collapse" });
             _ = u.treeNode(.{ .id = "sb_root", .label = "Root", .open = &st.world_open, .depth = 0 });
             if (st.world_open) {
                 _ = u.treeNode(.{ .id = "sb_c1", .label = "Child A", .depth = 1 });
