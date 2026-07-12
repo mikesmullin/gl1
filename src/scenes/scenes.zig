@@ -69,9 +69,24 @@ fn runCommandPalette(a: *app.App) void {
 
 fn drawHud(a: *app.App) void {
     const u = &a.ui;
-    var buf: [64]u8 = undefined;
-    const fps = if (a.dt > 0) 1.0 / a.dt else 0;
-    const msg = std.fmt.bufPrint(&buf, "{s}  {d:.0} fps", .{ nameOf(a.scene), fps }) catch "";
-    const m = u.font.measure(msg, 1.5);
-    u.drawText(a.width - m.w - 10, 8, 1.5, u.theme.text_dim, msg);
+    const hist = @import("../ui/components/histogram.zig");
+    // Scene name left of frame-time graph (top-right).
+    var buf: [48]u8 = undefined;
+    const name = std.fmt.bufPrint(&buf, "{s}", .{nameOf(a.scene)}) catch "";
+    const graph_w: f32 = 120;
+    const graph_h: f32 = 24;
+    const m = u.font.measure(name, 1.5);
+    const gx = a.width - graph_w - 10;
+    const gy: f32 = 6;
+    u.drawText(gx - m.w - 8, 10, 1.5, u.theme.text_dim, name);
+    var samples: [app.App.FtHist]f32 = undefined;
+    const slice = a.frameTimeSamples(samples[0..]);
+    // Overlay latest fps as a bare number (ms → fps), e.g. "60".
+    var ov: [16]u8 = undefined;
+    const overlay: []const u8 = if (slice.len > 0 and slice[slice.len - 1] > 0.05)
+        (std.fmt.bufPrint(&ov, "{d:.0}", .{1000.0 / slice[slice.len - 1]}) catch "")
+    else
+        "";
+    // max ~50ms so steady ~16ms (60fps) sits in the cool-blue zone; spikes go red.
+    hist.histogramAt(u, gx, gy, graph_w, graph_h, slice, 50.0, overlay);
 }

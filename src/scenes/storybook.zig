@@ -8,33 +8,61 @@ const state = @import("state.zig");
 /// Overview first, then alphabetical. Feel = springs / game-feel demos.
 const items = [_][]const u8{
     "Overview",
+    "Accordion",
     "Alert",
+    "Avatar",
     "Badge",
     "Button",
     "Checkbox",
     "Collapsible",
     "ColorPicker",
+    "Combobox",
     "ContextMenu",
+    "Counter",
     "Dropdown",
+    "DropdownButton",
     "Feel",
+    "Histogram",
     "Icons",
+    "IconButton",
+    "ImageWell",
+    "KeyValue",
     "Layout",
+    "Link",
     "ListBox",
     "Menubar",
     "Modal",
+    "MultiSelect",
     "Panel",
+    "Password",
     "Progress",
     "Radio",
+    "RequestButton",
     "Scroll",
+    "Segmented",
     "Slider",
     "Spinner",
     "Splitter",
+    "Table",
     "Tabs",
+    "TagInput",
     "TextInput",
     "Theme",
     "Toast",
     "Toggle",
     "Tree",
+    "Typeahead",
+};
+
+const fruit = [_][]const u8{ "Apple", "Apricot", "Banana", "Blueberry", "Cherry", "Grape", "Mango", "Orange", "Peach", "Pear" };
+const ms_items = [_][]const u8{ "Read", "Write", "Execute", "Admin", "Audit", "Share" };
+const table_cols = [_][]const u8{ "Name", "HP", "Status" };
+const table_cells = [_][3][]const u8{
+    .{ "Hero", "100", "ok" },
+    .{ "Slime", "40", "hurt" },
+    .{ "Torch", "1", "lit" },
+    .{ "Crystal", "80", "ok" },
+    .{ "Crate", "25", "ok" },
 };
 
 fn eq(a: []const u8, b: []const u8) bool {
@@ -51,17 +79,71 @@ pub fn frame(a: *app.App) void {
     u.drawText(16, 16, 2.5, u.theme.accent, "gl1 storybook");
     u.drawText(16, 42, 1.5, u.theme.text_dim, "living widget gallery");
 
-    _ = u.beginScroll(.{ .id = "sb_nav", .x = 4, .y = 60, .w = sidebar_w - 8, .h = a.height - 150 });
+    // Sidebar nav focus: click any tab to focus the list, then ↑/↓ to move selection.
+    const nav_rect = ui.Rect{ .x = 4, .y = 60, .w = sidebar_w - 8, .h = a.height - 150 };
+    if (a.input.mousePressed(.left) and nav_rect.contains(a.input.mouse_x, a.input.mouse_y)) {
+        st.sb_nav_focus = true;
+    } else if (a.input.mousePressed(.left) and !nav_rect.contains(a.input.mouse_x, a.input.mouse_y)) {
+        // Click outside sidebar nav releases keyboard focus on the tab list.
+        // (Detail panel widgets take their own focus as usual.)
+        if (a.input.mouse_x > sidebar_w) st.sb_nav_focus = false;
+    }
+    const nav_item_h: f32 = 28;
+    const nav_view_h = a.height - 150;
+    if (st.sb_nav_focus) {
+        var moved = false;
+        if (a.input.keyPressed(.down)) {
+            if (st.selected + 1 < items.len) {
+                st.selected += 1;
+                moved = true;
+            }
+        }
+        if (a.input.keyPressed(.up)) {
+            if (st.selected > 0) {
+                st.selected -= 1;
+                moved = true;
+            }
+        }
+        // Keep selected tab in view when keyboard-navigating past the fold.
+        if (moved) {
+            const nav_id = u.id("sb_nav");
+            if (u.scroll_phys.getPtr(nav_id.a)) |sp| {
+                const step = nav_item_h + u.theme.gap;
+                const pad = u.theme.pad;
+                const item_top = pad + @as(f32, @floatFromInt(st.selected)) * step;
+                const item_bot = item_top + nav_item_h;
+                const view = nav_view_h - 2; // scissor inset
+                if (item_top < sp.y) {
+                    sp.y = item_top;
+                    sp.vel = 0;
+                    sp.mode = .idle;
+                } else if (item_bot > sp.y + view) {
+                    sp.y = item_bot - view;
+                    sp.vel = 0;
+                    sp.mode = .idle;
+                }
+                if (sp.y < 0) sp.y = 0;
+            }
+        }
+    }
+
+    _ = u.beginScroll(.{ .id = "sb_nav", .x = 4, .y = 60, .w = sidebar_w - 8, .h = nav_view_h });
     for (items, 0..) |item, idx| {
         const i = u.id(item);
-        const r = u.alloc(0, 28);
-        const full = ui.Rect{ .x = r.x, .y = r.y, .w = sidebar_w - 24, .h = 28 };
+        const r = u.alloc(0, nav_item_h);
+        const full = ui.Rect{ .x = r.x, .y = r.y, .w = sidebar_w - 24, .h = nav_item_h };
         const stt = u.interact(i, full, false);
-        if (stt.clicked) st.selected = idx;
+        if (stt.clicked) {
+            st.selected = idx;
+            st.sb_nav_focus = true;
+        }
         const selected = st.selected == idx;
         if (selected) u.drawRect(full, u.theme.selected) else if (stt.hot) u.drawRect(full, u.theme.button_hot);
+        // Focus ring on the active tab when nav has keyboard focus.
+        if (selected and st.sb_nav_focus) {
+            u.drawRectOutline(.{ .x = full.x, .y = full.y, .w = full.w, .h = full.h }, u.theme.accent, 1);
+        }
         u.drawText(full.x + 10, full.y + 6, 2.0, if (selected) u.theme.accent else u.theme.text, item);
-        // No tooltips on nav tabs — they only repeated the label.
     }
     u.endScroll();
 
@@ -72,9 +154,12 @@ pub fn frame(a: *app.App) void {
     const dw = a.width - dx - 16;
     const title = if (st.selected < items.len) items[st.selected] else "Story";
     const tab = if (st.selected < items.len) items[st.selected] else "";
-    // Icons grid is tall — enable body scroll on the detail panel for that tab.
-    const detail_scroll = eq(tab, "Icons");
-    if (u.beginPanel(.{ .id = "detail", .x = dx, .y = 16, .w = dw, .h = a.height - 32, .title = title, .scroll = detail_scroll })) {
+    // Tall demos need body scroll. Use per-tab panel id so scroll offset does not
+    // carry over from Icons (and leave short pages looking "empty").
+    const detail_scroll = eq(tab, "Icons") or eq(tab, "RequestButton") or eq(tab, "Table") or eq(tab, "KeyValue") or eq(tab, "Histogram") or eq(tab, "ImageWell");
+    var detail_id_buf: [64]u8 = undefined;
+    const detail_id = std.fmt.bufPrint(&detail_id_buf, "detail_{s}", .{tab}) catch "detail";
+    if (u.beginPanel(.{ .id = detail_id, .x = dx, .y = 16, .w = dw, .h = a.height - 32, .title = title, .scroll = detail_scroll })) {
         defer u.endPanel();
 
         if (eq(tab, "Overview")) {
@@ -96,6 +181,31 @@ pub fn frame(a: *app.App) void {
             u.alert(.{ .text = "Success: selection framed.", .kind = .ok });
             u.alert(.{ .text = "Warning: soft pointer armed — Esc to release.", .kind = .warn });
             u.alert(.{ .text = "Error: could not load optional asset.", .kind = .err });
+        } else if (eq(tab, "Accordion")) {
+            u.label(.{ .text = "Accordion — exclusive (only one section open)" });
+            if (u.beginAccordion(.{ .id = "acc_a", .title = "General", .open_index = &st.acc_open, .index = 0 })) {
+                defer u.endAccordion(true);
+                u.label(.{ .text = "General settings live here." });
+                _ = u.checkbox(.{ .id = "acc_c1", .label = "Enabled", .value = &st.checked });
+            } else u.endAccordion(false);
+            if (u.beginAccordion(.{ .id = "acc_b", .title = "Network", .open_index = &st.acc_open, .index = 1 })) {
+                defer u.endAccordion(true);
+                u.label(.{ .text = "Host / port / TLS options…" });
+            } else u.endAccordion(false);
+            if (u.beginAccordion(.{ .id = "acc_c", .title = "Advanced", .open_index = &st.acc_open, .index = 2 })) {
+                defer u.endAccordion(true);
+                u.label(.{ .text = "Danger zone.", .color = u.theme.danger });
+            } else u.endAccordion(false);
+        } else if (eq(tab, "Avatar")) {
+            u.label(.{ .text = "Avatar / user chip — initials from name" });
+            u.beginHStack(.{ .h = 48 });
+            u.avatar(.{ .name = "Ada Lovelace", .size = 40 });
+            u.avatar(.{ .name = "Grace Hopper", .size = 40, .color = u.theme.info });
+            u.avatar(.{ .name = "Lin", .size = 40, .color = u.theme.warning });
+            _ = u.endHStack();
+            u.separator();
+            u.userChip(.{ .name = "ada@example.com", .color = u.theme.accent });
+            u.userChip(.{ .name = "guest", .color = u.theme.text_dim });
         } else if (eq(tab, "Badge")) {
             u.label(.{ .text = "Badge — compact status chips" });
             u.beginHStack(.{});
@@ -104,9 +214,18 @@ pub fn frame(a: *app.App) void {
             u.badge(.{ .label = "beta", .color = u.theme.warning });
             u.badge(.{ .label = "error", .color = u.theme.danger });
             _ = u.endHStack();
+            u.separator();
+            u.label(.{ .text = "Status pill — enum → color (badge family)" });
+            u.beginHStack(.{});
+            u.statusPill(.{ .kind = .idle });
+            u.statusPill(.{ .kind = .running });
+            u.statusPill(.{ .kind = .success });
+            u.statusPill(.{ .kind = .warning });
+            u.statusPill(.{ .kind = .error_ });
+            _ = u.endHStack();
         } else if (eq(tab, "Button")) {
             u.label(.{ .text = "Button — hover / active / click (pointer cursor)" });
-            if (u.button(.{ .id = "sb_btn", .label = "Primary" })) {
+            if (u.button(.{ .id = "sb_btn", .label = "Primary", .primary = true })) {
                 st.clicks +%= 1;
                 u.toast("Clicked Primary", .ok, 1.2);
             }
@@ -365,6 +484,19 @@ pub fn frame(a: *app.App) void {
         } else if (eq(tab, "Modal")) {
             u.label(.{ .text = "Modal dialog (Esc closes modal, not app)" });
             if (u.button(.{ .id = "open_m", .label = "Open modal" })) st.modal_open = true;
+            u.separator();
+            u.label(.{ .text = "Confirm modal — yes / no pattern" });
+            if (u.button(.{ .id = "open_confirm", .label = "Delete item…" })) st.confirm_open = true;
+            u.separator();
+            u.label(.{ .text = "Prompt modal — text field + OK / Cancel" });
+            if (u.button(.{ .id = "open_prompt", .label = "Rename…" })) st.prompt_open = true;
+            if (st.prompt_len > 0) {
+                var pb: [80]u8 = undefined;
+                u.label(.{
+                    .text = std.fmt.bufPrint(&pb, "Last prompt: {s}", .{st.prompt_buf[0..st.prompt_len]}) catch "",
+                    .color = u.theme.accent,
+                });
+            }
         } else if (eq(tab, "Panel")) {
             u.label(.{ .text = "Panel chrome — title bar + body." });
             u.label(.{ .text = "Use beginPanel / defer endPanel. This detail pane is one.", .color = u.theme.text_dim });
@@ -555,14 +687,290 @@ pub fn frame(a: *app.App) void {
                     _ = u.treeNode(.{ .id = "sb_c3", .label = "Leaf", .depth = 2, .selected = true });
                 }
             }
+        } else if (eq(tab, "Password")) {
+            u.label(.{ .text = "Password / secret — masked field + eye toggle" });
+            _ = u.passwordInput(.{
+                .id = "sb_pw",
+                .label = "Secret",
+                .buf = &st.pw_buf,
+                .len = &st.pw_len,
+                .show = &st.pw_show,
+                .w = 280,
+            });
+            u.label(.{
+                .text = if (st.pw_show) st.pw_buf[0..st.pw_len] else "(hidden)",
+                .color = u.theme.text_dim,
+            });
+        } else if (eq(tab, "TagInput")) {
+            u.label(.{ .text = "Tag input — chips + type; Enter or comma to add" });
+            _ = u.tagInput(.{
+                .id = "sb_tags",
+                .label = "Tags",
+                .tags = &st.tags,
+                .tag_lens = &st.tag_lens,
+                .tag_count = &st.tag_count,
+                .buf = &st.tag_buf,
+                .len = &st.tag_len,
+                .w = 320,
+            });
+        } else if (eq(tab, "Typeahead")) {
+            u.label(.{ .text = "Typeahead — filter list as you type; Enter picks first match" });
+            _ = u.typeahead(.{
+                .id = "sb_ta",
+                .label = "Fruit",
+                .buf = &st.ta_buf,
+                .len = &st.ta_len,
+                .items = &fruit,
+                .selected = &st.ta_sel,
+                .w = 280,
+            });
+        } else if (eq(tab, "Combobox")) {
+            u.label(.{ .text = "Combobox — typeahead that shows full list while focused" });
+            _ = u.combobox(.{
+                .id = "sb_cb",
+                .label = "Pick fruit",
+                .buf = &st.cb_buf,
+                .len = &st.cb_len,
+                .items = &fruit,
+                .selected = &st.cb_sel,
+                .w = 280,
+            });
+        } else if (eq(tab, "KeyValue")) {
+            u.label(.{ .text = "Key–value editor — add / edit / remove pairs" });
+            _ = u.keyValueEditor(.{
+                .id = "sb_kv",
+                .label = "Headers",
+                .keys = &st.kv_keys,
+                .key_lens = &st.kv_key_lens,
+                .vals = &st.kv_vals,
+                .val_lens = &st.kv_val_lens,
+                .count = &st.kv_count,
+                .w = 400,
+            });
+        } else if (eq(tab, "MultiSelect")) {
+            u.label(.{ .text = "Multi-select dropdown — checkbox menu" });
+            _ = u.multiSelect(.{
+                .id = "sb_ms",
+                .label = "Permissions",
+                .items = &ms_items,
+                .selected = &st.ms_sel,
+                .open = &st.ms_open,
+                .w = 260,
+            });
+        } else if (eq(tab, "Segmented")) {
+            u.label(.{ .text = "Segmented control — exclusive button group" });
+            _ = u.segmented(.{
+                .id = "sb_seg",
+                .items = &.{ "Day", "Week", "Month", "Year" },
+                .selected = &st.seg_sel,
+                .w = 320,
+            });
+            var sbuf: [32]u8 = undefined;
+            u.label(.{
+                .text = std.fmt.bufPrint(&sbuf, "selected index={d}", .{st.seg_sel}) catch "",
+                .color = u.theme.text_dim,
+            });
+        } else if (eq(tab, "IconButton")) {
+            u.label(.{ .text = "Icon-only toolbar buttons" });
+            u.beginHStack(.{ .h = 40 });
+            if (u.iconButton(.{ .id = "ib_save", .icon = .save })) u.toast("save", .info, 1);
+            if (u.iconButton(.{ .id = "ib_copy", .icon = .copy })) u.toast("copy", .info, 1);
+            if (u.iconButton(.{ .id = "ib_trash", .icon = .trash })) u.toast("trash", .warn, 1);
+            if (u.iconButton(.{ .id = "ib_set", .icon = .settings })) u.toast("settings", .info, 1);
+            _ = u.endHStack();
+            u.separator();
+            u.label(.{ .text = "With labels" });
+            _ = u.iconButton(.{ .id = "ib_lab", .icon = .download, .label = "Export" });
+        } else if (eq(tab, "DropdownButton")) {
+            u.label(.{ .text = "Dropdown button — main action + chevron menu" });
+            if (u.dropdownButton(.{
+                .id = "sb_ddb",
+                .label = "Save",
+                .items = &.{ "Save", "Save As…", "Export ZIP" },
+                .open = &st.ddb_open,
+            })) |pick| {
+                if (pick < 0) u.toast("main: Save", .ok, 1.2) else {
+                    var b: [32]u8 = undefined;
+                    u.toast(std.fmt.bufPrint(&b, "menu {d}", .{pick}) catch "menu", .info, 1.2);
+                }
+            }
+        } else if (eq(tab, "RequestButton")) {
+            const rb = @import("../ui/components/requestButton.zig");
+            u.label(.{ .text = "Request-state button — idle → loading → ok | err" });
+            u.label(.{ .text = "Frozen states (one instance each):", .color = u.theme.text_dim });
+            u.beginHStack(.{ .h = 40, .gap = 12 });
+            _ = u.requestButton(.{ .id = "rb_f0", .label = "Submit", .force = rb.State.idle, .w = 110 });
+            _ = u.requestButton(.{ .id = "rb_f1", .label = "Submit", .force = rb.State.loading, .w = 110 });
+            _ = u.requestButton(.{ .id = "rb_f2", .label = "Submit", .force = rb.State.ok, .w = 110 });
+            _ = u.requestButton(.{ .id = "rb_f3", .label = "Submit", .force = rb.State.err, .w = 110 });
+            _ = u.endHStack();
+            u.separator();
+            u.label(.{ .text = "Live instance — click to cycle states (~1s each)" });
+            // Drive live animation
+            if (st.req_phase != 0 and st.req_t0 >= 0 and a.time - st.req_t0 >= 1.0) {
+                if (st.req_phase == 1) {
+                    st.req_state = if (st.req_to_err) .err else .ok;
+                    st.req_phase = 2;
+                    st.req_t0 = a.time;
+                } else if (st.req_phase == 2) {
+                    st.req_state = .idle;
+                    st.req_phase = 0;
+                    st.req_t0 = -1;
+                    st.req_to_err = !st.req_to_err; // alternate ok/err next time
+                }
+            }
+            if (u.requestButton(.{
+                .id = "rb_live",
+                .label = "Submit request",
+                .label_loading = "Working…",
+                .label_ok = "Success!",
+                .label_err = "Failed",
+                .state = &st.req_state,
+                .w = 160,
+            })) {
+                st.req_state = .loading;
+                st.req_phase = 1;
+                st.req_t0 = a.time;
+            }
+            u.label(.{
+                .text = "Next live result alternates ok / err",
+                .color = u.theme.text_dim,
+            });
+        } else if (eq(tab, "Table")) {
+            u.label(.{ .text = "Table — columns, row select, sort headers" });
+            // sort cells copy for display
+            var cells = table_cells;
+            if (st.table_sort < 3) {
+                // simple bubble sort demo on selected column
+                var i: usize = 0;
+                while (i + 1 < cells.len) : (i += 1) {
+                    var j = i + 1;
+                    while (j < cells.len) : (j += 1) {
+                        const a_s = cells[i][st.table_sort];
+                        const b_s = cells[j][st.table_sort];
+                        const cmp = std.mem.order(u8, a_s, b_s);
+                        const swap = if (st.table_asc) cmp == .gt else cmp == .lt;
+                        if (swap) {
+                            const tmp = cells[i];
+                            cells[i] = cells[j];
+                            cells[j] = tmp;
+                        }
+                    }
+                }
+            }
+            const cell_views = [_][]const []const u8{
+                &cells[0],
+                &cells[1],
+                &cells[2],
+                &cells[3],
+                &cells[4],
+            };
+            _ = u.table(.{
+                .id = "sb_tbl",
+                .columns = &table_cols,
+                .cells = &cell_views,
+                .selected = &st.table_sel,
+                .sort_col = &st.table_sort,
+                .sort_asc = &st.table_asc,
+                .w = @min(420, dw - 40),
+            });
+            var tbuf: [32]u8 = undefined;
+            u.label(.{
+                .text = std.fmt.bufPrint(&tbuf, "selected row={d}", .{st.table_sel}) catch "",
+                .color = u.theme.text_dim,
+            });
+        } else if (eq(tab, "Counter")) {
+            u.label(.{ .text = "Counter / metric chips" });
+            u.beginHStack(.{ .h = 56, .gap = 12 });
+            u.counter(.{ .label = "entities", .value = 5 });
+            u.counter(.{ .label = "fps", .value = @as(i32, @intFromFloat(if (a.dt > 0) 1.0 / a.dt else 0)), .color = u.theme.info });
+            u.counter(.{ .label = "errors", .value = 0, .color = u.theme.danger });
+            _ = u.endHStack();
+        } else if (eq(tab, "Link")) {
+            u.label(.{ .text = "Link — opens system browser when URL set" });
+            _ = u.link(.{ .id = "lk1", .label = "https://ziglang.org", .url = "https://ziglang.org" });
+            _ = u.link(.{ .id = "lk2", .label = "GitHub (gl1)", .url = "https://github.com/mikesmullin/gl1" });
+            _ = u.link(.{ .id = "lk3", .label = "no-url (click only)", .url = "" });
+        } else if (eq(tab, "ImageWell")) {
+            const tex_mod = @import("../ui/tex.zig");
+            u.label(.{ .text = "Image well — fire-dragon.png (non-square source)" });
+            u.label(.{
+                .text = "Same asset · square tiles · fit (contain) / stretch / fill (cover)",
+                .color = u.theme.text_dim,
+            });
+            const dragon: ?*const tex_mod.Tex = if (a.demo_tex.ok) &a.demo_tex else null;
+            u.beginHStack(.{ .h = 80, .gap = 16 });
+            u.imageWell(.{ .w = 64, .h = 64, .tex = dragon, .fit = .fit, .label = "64 fit" });
+            u.imageWell(.{ .w = 64, .h = 64, .tex = dragon, .fit = .stretch, .label = "64 stretch" });
+            u.imageWell(.{ .w = 64, .h = 64, .tex = dragon, .fit = .fill, .label = "64 fill" });
+            _ = u.endHStack();
+            u.separator();
+            u.label(.{ .text = "Larger tiles" });
+            u.beginHStack(.{ .h = 140, .gap = 16 });
+            u.imageWell(.{ .w = 120, .h = 120, .tex = dragon, .fit = .fit, .label = "fit" });
+            u.imageWell(.{ .w = 120, .h = 120, .tex = dragon, .fit = .stretch, .label = "stretch" });
+            u.imageWell(.{ .w = 120, .h = 120, .tex = dragon, .fit = .fill, .label = "fill" });
+            _ = u.endHStack();
+            u.separator();
+            u.label(.{ .text = "Wide / tall destinations" });
+            u.beginHStack(.{ .h = 100, .gap = 16 });
+            u.imageWell(.{ .w = 160, .h = 72, .tex = dragon, .fit = .fit, .label = "wide fit" });
+            u.imageWell(.{ .w = 72, .h = 96, .tex = dragon, .fit = .fill, .label = "tall fill" });
+            u.imageWell(.{ .w = 64, .h = 64, .label = "no tex" });
+            _ = u.endHStack();
+        } else if (eq(tab, "Histogram")) {
+            u.label(.{ .text = "Scrolling histogram — cold→hot by magnitude (transparent bg)" });
+            u.histogram(.{ .samples = st.demo_hist[0..], .w = 280, .h = 24, .max_value = 1 });
+            u.histogram(.{ .samples = st.demo_hist[0..], .w = 200, .h = 40, .max_value = 1 });
+            u.separator();
+            u.label(.{ .text = "Frame-time graph (live) — also on every scene, top-right HUD" });
+            u.label(.{
+                .text = "Bar height = frame ms; blue at low ms, red toward 50ms (steady 60fps ≈ cool)",
+                .color = u.theme.text_dim,
+            });
+            var samples: [app.App.FtHist]f32 = undefined;
+            const slice = a.frameTimeSamples(samples[0..]);
+            var ov: [16]u8 = undefined;
+            const ov_s: []const u8 = if (slice.len > 0 and slice[slice.len - 1] > 0.05)
+                (std.fmt.bufPrint(&ov, "{d:.0}", .{1000.0 / slice[slice.len - 1]}) catch "")
+            else
+                "";
+            u.histogram(.{ .samples = slice, .w = 120, .h = 24, .max_value = 50, .overlay = ov_s });
+            st.demo_hist[@mod(@as(usize, @intFromFloat(a.time * 20)), st.demo_hist.len)] =
+                0.2 + 0.6 * @abs(@sin(@as(f32, @floatCast(a.time * 3))));
         }
     }
 
-    // Storybook-level modal (shared state)
+    // Storybook-level modals
     if (u.beginModal(.{ .id = "sb_modal", .title = "Demo Modal", .open = &st.modal_open, .w = 400, .h = 220 })) {
         defer u.endModal();
         u.label(.{ .text = "This is a modal stack sample." });
         u.label(.{ .text = "Press Esc to close without quitting.", .color = u.theme.text_dim });
         if (u.button(.{ .id = "sb_modal_ok", .label = "Close" })) st.modal_open = false;
+    }
+    if (u.beginModal(.{ .id = "sb_confirm", .title = "Confirm delete", .open = &st.confirm_open, .w = 380, .h = 180 })) {
+        defer u.endModal();
+        u.label(.{ .text = "Delete this item permanently?" });
+        u.label(.{ .text = "This cannot be undone.", .color = u.theme.danger });
+        u.separator();
+        u.beginHStack(.{ .h = 36, .gap = 10 });
+        if (u.button(.{ .id = "cf_yes", .label = "Delete", .w = 100 })) {
+            st.confirm_open = false;
+            u.toast("Deleted", .warn, 1.5);
+        }
+        if (u.button(.{ .id = "cf_no", .label = "Cancel", .w = 100 })) st.confirm_open = false;
+        _ = u.endHStack();
+    }
+    if (u.beginModal(.{ .id = "sb_prompt", .title = "Rename", .open = &st.prompt_open, .w = 400, .h = 200 })) {
+        defer u.endModal();
+        u.label(.{ .text = "Enter a new name:" });
+        _ = u.textInput(.{ .id = "prompt_ti", .label = "Name", .buf = &st.prompt_buf, .len = &st.prompt_len, .w = 320 });
+        u.beginHStack(.{ .h = 36, .gap = 10 });
+        if (u.button(.{ .id = "pr_ok", .label = "OK", .w = 90 })) {
+            st.prompt_open = false;
+            u.toast("Renamed", .ok, 1.2);
+        }
+        if (u.button(.{ .id = "pr_cancel", .label = "Cancel", .w = 90 })) st.prompt_open = false;
+        _ = u.endHStack();
     }
 }

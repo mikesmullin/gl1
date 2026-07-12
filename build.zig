@@ -65,6 +65,11 @@ fn addGl1(
         .target = target,
         .optimize = optimize,
     });
+    const demo_assets = b.createModule(.{
+        .root_source_file = b.path("assets/demo/embed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     return b.addExecutable(.{
         .name = name,
@@ -76,6 +81,7 @@ fn addGl1(
                 .{ .name = "sokol", .module = sokol_dep.module("sokol") },
                 .{ .name = "font_assets", .module = font_assets },
                 .{ .name = "icon_assets", .module = icon_assets },
+                .{ .name = "demo_assets", .module = demo_assets },
             },
         }),
     });

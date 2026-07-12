@@ -5,6 +5,7 @@ const sgl = sokol.gl;
 const sapp = sokol.app;
 const font_mod = @import("font.zig");
 const icons_mod = @import("icons.zig");
+const tex_mod = @import("ui/tex.zig");
 
 pub const Color = [4]f32;
 
@@ -33,6 +34,9 @@ pub const Command = union(enum) {
     text: struct { x: f32, y: f32, size: f32, color: Color, text: []const u8 },
     /// Icon atlas sprite; `id` is `@intFromEnum(icons.IconId)`.
     icon: struct { x: f32, y: f32, size: f32, id: u16, color: Color },
+    /// Full texture draw (RGBA image well). `fit`: 0=fit, 1=stretch, 2=fill.
+    /// `tex` is opaque pointer to `ui/tex.Tex` (valid for the frame).
+    image: struct { r: Rect, tex: *const anyopaque, fit: u8 },
     scissor_push: Rect,
     scissor_pop: void,
 };
@@ -82,6 +86,10 @@ pub const List = struct {
         self.push(.{ .icon = .{ .x = x, .y = y, .size = size, .id = id, .color = color } });
     }
 
+    pub fn image(self: *List, x: f32, y: f32, w: f32, h: f32, tex: *const anyopaque, fit: u8) void {
+        self.push(.{ .image = .{ .r = .{ .x = x, .y = y, .w = w, .h = h }, .tex = tex, .fit = fit } });
+    }
+
     fn applyScissor(r: Rect) void {
         // Scissor is in framebuffer pixels; account for DPI.
         const dpi = sapp.dpiScale();
@@ -122,6 +130,15 @@ pub const List = struct {
                         const id: icons_mod.IconId = @enumFromInt(c.id);
                         ic.draw(c.x, c.y, c.size, id, c.color);
                     }
+                },
+                .image => |c| {
+                    const t: *const tex_mod.Tex = @ptrCast(@alignCast(c.tex));
+                    const fit: tex_mod.Tex.Fit = switch (c.fit) {
+                        1 => .stretch,
+                        2 => .fill,
+                        else => .fit,
+                    };
+                    t.draw(c.r.x, c.r.y, c.r.w, c.r.h, fit);
                 },
                 .scissor_push => |r| {
                     const parent = if (depth > 0) stack[depth - 1] else fullscreen;

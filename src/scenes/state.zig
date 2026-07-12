@@ -87,6 +87,10 @@ pub const State = struct {
     dropdown_open: bool = false,
     tab_sel: usize = 0,
     modal_open: bool = false,
+    confirm_open: bool = false,
+    prompt_open: bool = false,
+    prompt_buf: [64]u8 = undefined,
+    prompt_len: usize = 0,
     collab_a: bool = true,
     collab_b: bool = false,
     list_sel: usize = 1,
@@ -112,6 +116,43 @@ pub const State = struct {
     /// Storybook TextInput line-numbers example.
     code_buf: [512]u8 = undefined,
     code_len: usize = 0,
+
+    // --- Storybook demos for new widgets ---
+    pw_buf: [64]u8 = undefined,
+    pw_len: usize = 0,
+    pw_show: bool = false,
+    tag_buf: [32]u8 = undefined,
+    tag_len: usize = 0,
+    tags: [12][24]u8 = undefined,
+    tag_lens: [12]usize = @splat(0),
+    tag_count: usize = 0,
+    ta_buf: [48]u8 = undefined,
+    ta_len: usize = 0,
+    ta_sel: usize = 0,
+    cb_buf: [48]u8 = undefined,
+    cb_len: usize = 0,
+    cb_sel: usize = 0,
+    kv_keys: [8][32]u8 = undefined,
+    kv_key_lens: [8]usize = @splat(0),
+    kv_vals: [8][32]u8 = undefined,
+    kv_val_lens: [8]usize = @splat(0),
+    kv_count: usize = 2,
+    ms_sel: [6]bool = .{ true, false, true, false, false, false },
+    ms_open: bool = false,
+    seg_sel: usize = 1,
+    ddb_open: bool = false,
+    req_state: @import("../ui/components/requestButton.zig").State = .idle,
+    req_phase: u8 = 0, // 0 idle, 1 loading wait, 2 ok/err wait
+    req_t0: f64 = -1,
+    req_to_err: bool = false,
+    table_sel: i32 = 0,
+    table_sort: usize = 0,
+    table_asc: bool = true,
+    /// Accordion exclusive section (-1 = none).
+    acc_open: i32 = 0,
+    /// Storybook sidebar nav has keyboard focus (arrow up/down changes tab).
+    sb_nav_focus: bool = false,
+    demo_hist: [48]f32 = undefined,
     /// Storybook splitter demo left width.
     sb_split_w: f32 = 160,
     sb_menu_status: [48]u8 = undefined,
@@ -203,6 +244,36 @@ pub const State = struct {
         ;
         @memcpy(self.code_buf[0..code.len], code);
         self.code_len = code.len;
+        const secret = "hunter2";
+        @memcpy(self.pw_buf[0..secret.len], secret);
+        self.pw_len = secret.len;
+        // seed tags
+        const t0 = "zig";
+        const t1 = "sokol";
+        @memcpy(self.tags[0][0..t0.len], t0);
+        self.tag_lens[0] = t0.len;
+        @memcpy(self.tags[1][0..t1.len], t1);
+        self.tag_lens[1] = t1.len;
+        self.tag_count = 2;
+        const k0 = "host";
+        const v0 = "localhost";
+        @memcpy(self.kv_keys[0][0..k0.len], k0);
+        self.kv_key_lens[0] = k0.len;
+        @memcpy(self.kv_vals[0][0..v0.len], v0);
+        self.kv_val_lens[0] = v0.len;
+        const k1 = "port";
+        const v1 = "8080";
+        @memcpy(self.kv_keys[1][0..k1.len], k1);
+        self.kv_key_lens[1] = k1.len;
+        @memcpy(self.kv_vals[1][0..v1.len], v1);
+        self.kv_val_lens[1] = v1.len;
+        self.kv_count = 2;
+        // demo histogram wave
+        for (&self.demo_hist, 0..) |*s, i| {
+            const t = @as(f32, @floatFromInt(i)) / 48.0;
+            s.* = 0.3 + 0.5 * @sin(t * 6.28) * @sin(t * 12.0);
+            if (s.* < 0) s.* = -s.*;
+        }
         self.initWorld();
     }
 

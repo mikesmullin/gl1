@@ -16,6 +16,8 @@ const scenes = @import("scenes/scenes.zig");
 const transition_mod = @import("transition.zig");
 const font_assets = @import("font_assets");
 const icon_assets = @import("icon_assets");
+const demo_assets = @import("demo_assets");
+const tex_mod = @import("ui/tex.zig");
 
 pub const Input = input_mod.Input;
 pub const Font = font_mod.Font;
@@ -45,6 +47,33 @@ pub const App = struct {
     pip_3d: sgl.Pipeline = .{},
     font_ok: bool = false,
     icons_ok: bool = false,
+    /// Ring buffer of recent frame times (ms) for the HUD histogram.
+    ft_ms: [60]f32 = @splat(0),
+    ft_head: usize = 0,
+    ft_count: usize = 0,
+    /// Storybook demo image (fire-dragon.png).
+    demo_tex: tex_mod.Tex = .{},
+
+    pub const FtHist: usize = 60;
+
+    pub fn pushFrameTime(self: *App, dt_s: f32) void {
+        const ms = dt_s * 1000.0;
+        self.ft_ms[self.ft_head] = ms;
+        self.ft_head = (self.ft_head + 1) % FtHist;
+        if (self.ft_count < FtHist) self.ft_count += 1;
+    }
+
+    /// Oldest → newest samples into `out` (returns slice length).
+    pub fn frameTimeSamples(self: *const App, out: []f32) []const f32 {
+        const n = @min(out.len, self.ft_count);
+        if (n == 0) return out[0..0];
+        const start = (self.ft_head + FtHist - n) % FtHist;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            out[i] = self.ft_ms[(start + i) % FtHist];
+        }
+        return out[0..n];
+    }
 
     /// Per-scene wipe color (destination scene).
     pub fn sceneWipeColor(kind: scenes.SceneKind) [4]f32 {
@@ -134,6 +163,7 @@ export fn init() void {
 
     loadFont();
     loadIcons();
+    loadDemoTex();
     // GPU diamond wipe (after sg + sgl are ready).
     g.transition.init();
     g.last_time = 0;
@@ -158,6 +188,14 @@ fn loadIcons() void {
         return;
     };
     g.icons_ok = true;
+}
+
+fn loadDemoTex() void {
+    g.demo_tex.loadFromPng(g.allocator, demo_assets.fire_dragon_png) catch |err| {
+        std.log.err("failed to load demo texture: {s}", .{@errorName(err)});
+        return;
+    };
+    std.log.info("loaded demo texture fire-dragon.png", .{});
 }
 
 fn trySceneHotkeys() void {
@@ -203,6 +241,7 @@ export fn frame() void {
     g.dt = @floatCast(sapp.frameDuration());
     if (g.dt <= 0 or g.dt > 0.1) g.dt = 1.0 / 60.0;
     g.time += g.dt;
+    g.pushFrameTime(g.dt);
     _ = now;
 
     g.width = sapp.widthf();
@@ -291,6 +330,7 @@ export fn frame() void {
 
 export fn cleanup() void {
     g.transition.deinit();
+    g.demo_tex.deinit();
     g.icons.deinit();
     g.font.deinit();
     g.ui.deinit();

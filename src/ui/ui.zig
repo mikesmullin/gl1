@@ -1051,6 +1051,8 @@ pub const Ui = struct {
         label: []const u8,
         w: f32 = 0,
         disabled: bool = false,
+        /// Accent-filled primary CTA.
+        primary: bool = false,
     }) bool {
         return components.button.button(self, opts);
     }
@@ -1102,6 +1104,109 @@ pub const Ui = struct {
         w: f32 = 200,
     }) bool {
         return components.colorPicker.colorPicker(self, opts);
+    }
+
+    pub fn passwordInput(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        buf: []u8,
+        len: *usize,
+        show: *bool,
+        w: f32 = 220,
+    }) bool {
+        return components.passwordInput.passwordInput(self, opts);
+    }
+
+    pub fn tagInput(self: *Ui, opts: anytype) bool {
+        return components.tagInput.tagInput(self, opts);
+    }
+
+    pub fn typeahead(self: *Ui, opts: anytype) bool {
+        return components.typeahead.typeahead(self, opts);
+    }
+
+    pub fn combobox(self: *Ui, opts: anytype) bool {
+        return components.typeahead.combobox(self, opts);
+    }
+
+    pub fn keyValueEditor(self: *Ui, opts: anytype) bool {
+        return components.keyValueEditor.keyValueEditor(self, opts);
+    }
+
+    pub fn multiSelect(self: *Ui, opts: anytype) bool {
+        return components.multiSelect.multiSelect(self, opts);
+    }
+
+    pub fn segmented(self: *Ui, opts: struct {
+        id: []const u8,
+        items: []const []const u8,
+        selected: *usize,
+        w: f32 = 280,
+    }) bool {
+        return components.segmented.segmented(self, opts);
+    }
+
+    pub fn dropdownButton(self: *Ui, opts: anytype) ?i32 {
+        return components.dropdownButton.dropdownButton(self, opts);
+    }
+
+    pub fn requestButton(self: *Ui, opts: anytype) bool {
+        return components.requestButton.requestButton(self, opts);
+    }
+
+    pub fn table(self: *Ui, opts: anytype) bool {
+        return components.table.table(self, opts);
+    }
+
+    pub fn avatar(self: *Ui, opts: anytype) void {
+        components.avatar.avatar(self, opts);
+    }
+
+    pub fn userChip(self: *Ui, opts: anytype) void {
+        components.avatar.userChip(self, opts);
+    }
+
+    pub fn link(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        url: []const u8 = "",
+        size: ?f32 = null,
+    }) bool {
+        if (opts.size) |s| {
+            return components.link.link(self, .{ .id = opts.id, .label = opts.label, .url = opts.url, .size = s });
+        }
+        return components.link.link(self, .{ .id = opts.id, .label = opts.label, .url = opts.url });
+    }
+
+    pub fn counter(self: *Ui, opts: anytype) void {
+        components.counter.counter(self, opts);
+    }
+
+    pub fn statusPill(self: *Ui, opts: anytype) void {
+        components.statusPill.statusPill(self, opts);
+    }
+
+    pub fn beginAccordion(self: *Ui, opts: struct {
+        id: []const u8,
+        title: []const u8,
+        /// Shared exclusive index (-1 = none open).
+        open_index: *i32,
+        /// This section's index in the group.
+        index: i32,
+    }) bool {
+        return components.accordion.beginSection(self, opts);
+    }
+
+    pub fn endAccordion(self: *Ui, open: bool) void {
+        components.accordion.endSection(self, open);
+    }
+
+    pub fn imageWell(self: *Ui, opts: anytype) void {
+        components.imageWell.imageWell(self, opts);
+    }
+
+    pub fn histogram(self: *Ui, opts: anytype) void {
+        components.histogram.histogram(self, opts);
     }
 
     pub fn textInput(self: *Ui, opts: struct {

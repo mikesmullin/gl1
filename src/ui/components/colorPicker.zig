@@ -241,26 +241,31 @@ pub fn colorPicker(ui: anytype, opts: anytype) bool {
         }
     }
 
-    // --- Draw rainbow track ---
-    const border = if (st_ui.hot or st_ui.active or ui.drag.eq(i) or cp.editing) ui.theme.accent else ui.theme.panel_border;
-    ui.drawRectBorder(bar, ui.theme.input_bg, border, 1);
+    // --- Draw track: solid chosen color by default; rainbow only while scrub-dragging ---
+    const scrubbing = cp.did_scrub and (ui.drag.eq(i) or ui.input.mouseDown(.left));
+    const border = if (st_ui.hot or st_ui.active or scrubbing or cp.editing) ui.theme.accent else ui.theme.panel_border;
+    const solid: Color = if (override != null)
+        ui.theme.input_bg
+    else
+        opts.color.*;
+    ui.drawRectBorder(bar, if (scrubbing) ui.theme.input_bg else solid, border, 1);
     const inner = Rect{ .x = bar.x + 1, .y = bar.y + 1, .w = bar.w - 2, .h = bar.h - 2 };
-    const segs: i32 = @intFromFloat(@max(8, @min(inner.w, 64)));
-    var s: i32 = 0;
-    while (s < segs) : (s += 1) {
-        const t0 = @as(f32, @floatFromInt(s)) / @as(f32, @floatFromInt(segs));
-        const col = sinebow(t0);
-        const x0 = inner.x + @as(f32, @floatFromInt(s)) * inner.w / @as(f32, @floatFromInt(segs));
-        const x1 = inner.x + @as(f32, @floatFromInt(s + 1)) * inner.w / @as(f32, @floatFromInt(segs));
-        ui.drawRect(.{ .x = x0, .y = inner.y, .w = @max(1, x1 - x0), .h = inner.h }, col);
-    }
-    // Hide hue tick while typing so the field reads as a text input.
-    if (!cp.editing) {
+    if (scrubbing) {
+        const segs: i32 = @intFromFloat(@max(8, @min(inner.w, 64)));
+        var s: i32 = 0;
+        while (s < segs) : (s += 1) {
+            const t0 = @as(f32, @floatFromInt(s)) / @as(f32, @floatFromInt(segs));
+            const col = sinebow(t0);
+            const x0 = inner.x + @as(f32, @floatFromInt(s)) * inner.w / @as(f32, @floatFromInt(segs));
+            const x1 = inner.x + @as(f32, @floatFromInt(s + 1)) * inner.w / @as(f32, @floatFromInt(segs));
+            ui.drawRect(.{ .x = x0, .y = inner.y, .w = @max(1, x1 - x0), .h = inner.h }, col);
+        }
+        // Hue position tick while scrubbing.
         const tick_x = inner.x + cp.t * inner.w;
         ui.drawRect(.{ .x = tick_x - 1, .y = inner.y, .w = 2, .h = inner.h }, .{ 1, 1, 1, 0.85 });
     }
 
-    // Centered value plate: `#` + digits (max 7 visible chars with prefix).
+    // Centered hex value — glyphs already have a 1px outline; no plate behind text.
     var hex_buf: [8]u8 = undefined;
     const val_s: []const u8 = blk: {
         if (override) |o| break :blk o;
@@ -272,30 +277,16 @@ pub fn colorPicker(ui: anytype, opts: anytype) bool {
         break :blk formatHex(opts.color.*, hex_buf[0..7]);
     };
     const vm = ui.font.measure(val_s, size);
-    const plate_w = @max(vm.w + 14, 56);
-    const plate_h = ui.font.lineHeight(size) + 4;
-    const plate = Rect{
-        .x = bar.x + (bar.w - plate_w) * 0.5,
-        .y = bar.y + (bar.h - plate_h) * 0.5,
-        .w = plate_w,
-        .h = plate_h,
-    };
-    // Stronger plate while editing so it feels like a text field.
-    const plate_bg: Color = if (cp.editing) .{ 0.06, 0.07, 0.09, 0.92 } else .{ 0.08, 0.09, 0.11, 0.72 };
-    ui.drawRect(plate, plate_bg);
-    if (cp.editing) {
-        ui.drawRectBorder(plate, .{ 0, 0, 0, 0 }, ui.theme.accent, 1);
-    }
-    const tx = plate.x + (plate.w - vm.w) * 0.5;
-    const ty = plate.y + (plate.h - ui.font.lineHeight(size)) * 0.5;
+    const lh = ui.font.lineHeight(size);
+    const tx = bar.x + (bar.w - vm.w) * 0.5;
+    const ty = bar.y + (bar.h - lh) * 0.5;
     ui.drawText(tx, ty, size, ui.theme.text, val_s);
 
     // Blinking caret always at end of the digit run (after last char / after `#` if empty).
     if (cp.editing) {
         const blink_on = @mod(@as(i64, @intFromFloat(ui.time * 2.2)), 2) == 0;
         if (blink_on) {
-            const caret_x = tx + vm.w + 1;
-            ui.drawRect(.{ .x = caret_x, .y = ty, .w = 2, .h = ui.font.lineHeight(size) }, ui.theme.text);
+            ui.drawRect(.{ .x = tx + vm.w + 1, .y = ty, .w = 2, .h = lh }, ui.theme.text);
         }
     }
 
