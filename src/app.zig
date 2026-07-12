@@ -53,6 +53,8 @@ pub const App = struct {
     ft_count: usize = 0,
     /// Storybook demo image (fire-dragon.png).
     demo_tex: tex_mod.Tex = .{},
+    /// When > 0, quit after this many seconds (screenshot automation).
+    auto_quit_s: f32 = 0,
 
     pub const FtHist: usize = 60;
 
@@ -101,12 +103,23 @@ pub fn global() *App {
     return &g;
 }
 
-pub fn run(allocator: std.mem.Allocator, scene: scenes.SceneKind, io: std.Io) void {
+pub fn run(allocator: std.mem.Allocator, scene: scenes.SceneKind, io: std.Io, opts: struct {
+    story_tab: ?[]const u8 = null,
+    auto_quit_s: f32 = 0,
+}) void {
     g.allocator = allocator;
     g.io = io;
     g.scene = scene;
     g.scene_state.init();
     g.ui.init(allocator);
+    g.auto_quit_s = opts.auto_quit_s;
+    if (opts.story_tab) |tab_name| {
+        if (@import("scenes/storybook.zig").tabIndex(tab_name)) |idx| {
+            g.scene_state.selected = idx;
+        } else {
+            std.log.warn("unknown storybook tab '{s}'", .{tab_name});
+        }
+    }
 
     sapp.run(.{
         .init_cb = init,
@@ -243,6 +256,9 @@ export fn frame() void {
     g.time += g.dt;
     g.pushFrameTime(g.dt);
     _ = now;
+    if (g.auto_quit_s > 0 and g.time >= g.auto_quit_s) {
+        sapp.quit();
+    }
 
     g.width = sapp.widthf();
     g.height = sapp.heightf();

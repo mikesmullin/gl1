@@ -10,7 +10,7 @@ const HELP =
     \\gl1 — Zig + Sokol UI prototype
     \\
     \\usage:
-    \\  gl1 [--scene <name>]
+    \\  gl1 [--scene <name>] [--story-tab <name>] [--auto-quit <seconds>]
     \\  gl1 help
     \\  gl1 version
     \\
@@ -20,6 +20,10 @@ const HELP =
     \\  text            bitmap font sample
     \\  triangle        hello triangle
     \\  panels          desktop windows + dock
+    \\
+    \\options:
+    \\  --story-tab     open storybook on this sidebar tab (e.g. Button)
+    \\  --auto-quit     quit after N seconds (screenshot automation)
     \\
     \\keys:
     \\  Ctrl+P          command palette (type "scene" for scenes)
@@ -36,6 +40,8 @@ pub fn main(init: std.process.Init) !void {
     const stdout = &stdout_writer.interface;
 
     var scene: scenes.SceneKind = .storybook;
+    var story_tab: ?[]const u8 = null;
+    var auto_quit_s: f32 = 0;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -56,6 +62,17 @@ pub fn main(init: std.process.Init) !void {
                 try stdout.flush();
                 std.process.exit(1);
             };
+        } else if (std.mem.eql(u8, a, "--story-tab") and i + 1 < args.len) {
+            i += 1;
+            story_tab = args[i];
+            scene = .storybook;
+        } else if (std.mem.eql(u8, a, "--auto-quit") and i + 1 < args.len) {
+            i += 1;
+            auto_quit_s = std.fmt.parseFloat(f32, args[i]) catch {
+                try stdout.print("error: bad --auto-quit value '{s}'\n", .{args[i]});
+                try stdout.flush();
+                std.process.exit(1);
+            };
         } else {
             try stdout.print("error: unknown arg '{s}'\n\n{s}", .{ a, HELP });
             try stdout.flush();
@@ -63,5 +80,5 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    app.run(arena, scene, init.io);
+    app.run(arena, scene, init.io, .{ .story_tab = story_tab, .auto_quit_s = auto_quit_s });
 }

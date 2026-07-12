@@ -6,7 +6,7 @@ const color_picker = @import("../ui/components/colorPicker.zig");
 const state = @import("state.zig");
 
 /// Overview first, then alphabetical. Feel = springs / game-feel demos.
-const items = [_][]const u8{
+pub const items = [_][]const u8{
     "Overview",
     "Accordion",
     "Alert",
@@ -67,6 +67,14 @@ const table_cells = [_][3][]const u8{
 
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+
+/// Resolve storybook sidebar tab name → index (case-sensitive match on `items`).
+pub fn tabIndex(name: []const u8) ?usize {
+    for (items, 0..) |it, idx| {
+        if (std.mem.eql(u8, it, name)) return idx;
+    }
+    return null;
 }
 
 pub fn frame(a: *app.App) void {
