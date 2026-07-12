@@ -30,5 +30,5 @@ without changing widget code. Keep new primitives backend-agnostic.
 
 1. Prefer `ui.drawRect` / `drawText` / `drawIcon` (they push commands).  
 2. Scenes that need raw 3D (canvas cubes) may use `sgl` directly **before** UI.  
-3. Scene transition diamond overlay draws after UI flush (app frame).  
+3. Scene transition diamond: CPU path enqueues sgl quads before `sgl.draw`; GPU path draws with raw `sg` **after** `sgl.draw` so it covers UI.  
 4. Do not grow ad-hoc GPU state inside widgets.

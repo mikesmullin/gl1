@@ -767,18 +767,46 @@ pub fn moveRight(edit: *Edit, text: []const u8, extend: bool, by_word: bool) voi
     edit.block = false;
 }
 
-/// Insert `indent` (e.g. two spaces) at the start of each hard line that has a caret,
-/// or at each caret if mid-line (soft indent). Shift+Tab removes leading indent.
-pub fn indentLines(edit: *Edit, buf: []u8, len: *usize, indent: []const u8, outdent: bool) bool {
+/// Start of the soft-wrap visual row containing `pos` (or hard line start).
+pub fn visualLineStart(
+    text: []const u8,
+    pos: usize,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) usize {
+    if (font) |f| {
+        var rows_buf: [MaxSoftRows]VisualRow = undefined;
+        const n = layoutSoft(text, f, size, wrap_px, rows_buf[0..]);
+        if (n > 0) {
+            const vr = visualRowOf(rows_buf[0..n], pos);
+            return rows_buf[vr].start;
+        }
+    }
+    return lineStart(text, pos);
+}
+
+/// Insert `indent` at the start of each **visual** (soft-wrap) line that has a caret.
+/// Shift+Tab removes leading indent at those visual-line starts.
+pub fn indentLines(
+    edit: *Edit,
+    buf: []u8,
+    len: *usize,
+    indent: []const u8,
+    outdent: bool,
+    font: ?*const Font,
+    size: f32,
+    wrap_px: f32,
+) bool {
     if (indent.len == 0 and !outdent) return false;
     edit.beforeMutate(buf, len.*, false);
     const text = buf[0..len.*];
-    // Collect unique hard-line starts for carets (low→high)
+    // Unique visual-line starts for each caret (not hard-line — soft wrap aware).
     var lines: [MaxCarets]usize = undefined;
     var n_lines: usize = 0;
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
-        const ls = lineStart(text, edit.carets[i].lo());
+        const ls = visualLineStart(text, edit.carets[i].lo(), font, size, wrap_px);
         var dup = false;
         var j: usize = 0;
         while (j < n_lines) : (j += 1) {
@@ -1608,10 +1636,10 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
-    // Tab / Shift+Tab: indent / outdent hard lines with carets (multi-line only).
+    // Tab / Shift+Tab: indent / outdent at soft-wrap visual line starts.
     // Caller sets Ui.consumed_tab so focus cycling skips this frame.
     if (multiline and input.keyPressed(.tab) and !ctrl and !alt) {
-        changed = indentLines(edit, buf, len, "  ", shift) or changed;
+        changed = indentLines(edit, buf, len, "  ", shift, font, font_size, wrap_px) or changed;
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }

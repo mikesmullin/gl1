@@ -46,12 +46,23 @@ pub const App = struct {
     font_ok: bool = false,
     icons_ok: bool = false,
 
+    /// Per-scene wipe color (destination scene).
+    pub fn sceneWipeColor(kind: scenes.SceneKind) [4]f32 {
+        return switch (kind) {
+            .canvas => transition_mod.color_blue,
+            .storybook => transition_mod.color_charcoal,
+            .text => transition_mod.color_green,
+            .triangle => transition_mod.color_amber,
+            .panels => transition_mod.color_pink,
+        };
+    }
+
     /// Request a scene change with diamond wipe (~1s). No-ops if already transitioning.
     pub fn requestScene(self: *App, next: scenes.SceneKind) void {
         if (next == self.scene and self.scene_pending == null) return;
         if (self.transition.busy()) return;
         self.scene_pending = next;
-        self.transition.startWipe();
+        self.transition.startWipe(sceneWipeColor(next));
     }
 };
 
@@ -123,6 +134,8 @@ export fn init() void {
 
     loadFont();
     loadIcons();
+    // GPU diamond wipe (after sg + sgl are ready).
+    g.transition.init();
     g.last_time = 0;
 }
 
@@ -235,12 +248,18 @@ export fn frame() void {
     g.ui.endFrame();
     g.ui.flushDraw();
 
-    // Diamond overlay after UI so it covers everything.
-    if (g.transition.busy()) {
+    // CPU diamond uses sgl quads → must enqueue before sgl.draw.
+    if (g.transition.busy() and !g.transition.ok) {
         g.transition.draw(g.width, g.height);
     }
 
     sgl.draw();
+
+    // GPU diamond is a raw sg fullscreen pass → after sgl so it covers UI.
+    if (g.transition.busy() and g.transition.ok) {
+        g.transition.draw(g.width, g.height);
+    }
+
     sg.endPass();
     sg.commit();
 
@@ -271,6 +290,7 @@ export fn frame() void {
 }
 
 export fn cleanup() void {
+    g.transition.deinit();
     g.icons.deinit();
     g.font.deinit();
     g.ui.deinit();
