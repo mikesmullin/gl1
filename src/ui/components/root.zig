@@ -15,6 +15,7 @@ pub const dropdown = @import("dropdown.zig");
 pub const tabs = @import("tabs.zig");
 pub const listBox = @import("listBox.zig");
 pub const colorSwatch = @import("colorSwatch.zig");
+pub const colorPicker = @import("colorPicker.zig");
 pub const searchField = @import("searchField.zig");
 pub const listBoxNav = @import("listBoxNav.zig");
 pub const badge = @import("badge.zig");

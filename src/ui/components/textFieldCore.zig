@@ -8,8 +8,12 @@ const Id = types.Id;
 
 pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     const box = opts.box;
+    // Optional larger hit target (e.g. line-number gutter + text share one field).
+    const hit: Rect = if (@hasField(@TypeOf(opts), "hit_box")) opts.hit_box else box;
     const i = Id{ .a = opts.id_key, .b = 0 };
-    const st = ui.interact(i, box, false);
+    const show_border = if (@hasField(@TypeOf(opts), "show_border")) opts.show_border else true;
+    // Parent draws one outer border (e.g. line-number gutter chrome) → no second focus ring.
+    const st = ui.interactEx(i, hit, false, .{ .focus_ring = show_border });
     const ed = ui.editState(opts.id_key);
     ed.clampAll(opts.len.*);
 
@@ -24,7 +28,7 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     const middle_down = ui.input.mouseDown(.middle);
     const left_press = ui.input.mousePressed(.left);
     const mid_press = ui.input.mousePressed(.middle);
-    const over = box.contains(ui.input.mouse_x, ui.input.mouse_y);
+    const over = hit.contains(ui.input.mouse_x, ui.input.mouse_y);
 
     // Only on press — never on release (`st.clicked`), so multi-click counting stays correct.
     // Middle-click also starts a block selection on multi-line (no modifiers needed).
@@ -76,7 +80,10 @@ pub fn textFieldCore(ui: anytype, opts: anytype) bool {
     }
     if (ui.input.mouseReleased(.left) or ui.input.mouseReleased(.middle)) te.handleMouseUp(ed);
 
-    ui.drawRectBorder(box, ui.theme.input_bg, if (focused) ui.theme.accent else ui.theme.panel_border, 1);
+    if (show_border) {
+        // Single chrome: fill + border (focus ring skipped when show_border so this is the only accent).
+        ui.drawRectBorder(box, ui.theme.input_bg, if (focused) ui.theme.accent else ui.theme.panel_border, 1);
+    }
 
     var changed = false;
     if (focused) {

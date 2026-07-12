@@ -786,38 +786,60 @@ pub fn visualLineStart(
     return lineStart(text, pos);
 }
 
-/// Insert `indent` at the start of each **visual** (soft-wrap) line that has a caret.
-/// Shift+Tab removes leading indent at those visual-line starts.
+fn pushUniqueLine(lines: []usize, n_lines: *usize, ls: usize) void {
+    var j: usize = 0;
+    while (j < n_lines.*) : (j += 1) {
+        if (lines[j] == ls) return;
+    }
+    if (n_lines.* < lines.len) {
+        lines[n_lines.*] = ls;
+        n_lines.* += 1;
+    }
+}
+
+/// True if any caret has a non-empty selection.
+pub fn anySelection(edit: *const Edit) bool {
+    var i: usize = 0;
+    while (i < edit.caret_ct) : (i += 1) {
+        if (edit.carets[i].hasSel()) return true;
+    }
+    return false;
+}
+
+/// Insert `indent` at the start of each **hard** line that has a caret or selection.
+/// With a multi-line selection, every hard line touching the selection is indented.
+/// Shift+Tab removes leading indent at those hard-line starts.
 pub fn indentLines(
     edit: *Edit,
     buf: []u8,
     len: *usize,
     indent: []const u8,
     outdent: bool,
-    font: ?*const Font,
-    size: f32,
-    wrap_px: f32,
 ) bool {
     if (indent.len == 0 and !outdent) return false;
     edit.beforeMutate(buf, len.*, false);
     const text = buf[0..len.*];
-    // Unique visual-line starts for each caret (not hard-line — soft wrap aware).
-    var lines: [MaxCarets]usize = undefined;
+    // Enough slots for multi-line selections (bounded).
+    var lines: [64]usize = undefined;
     var n_lines: usize = 0;
     var i: usize = 0;
     while (i < edit.caret_ct) : (i += 1) {
-        const ls = visualLineStart(text, edit.carets[i].lo(), font, size, wrap_px);
-        var dup = false;
-        var j: usize = 0;
-        while (j < n_lines) : (j += 1) {
-            if (lines[j] == ls) {
-                dup = true;
-                break;
+        const r = edit.carets[i];
+        if (r.hasSel()) {
+            // Every hard line that intersects [lo, hi).
+            var p = lineStart(text, r.lo());
+            const end = r.hi();
+            while (true) {
+                pushUniqueLine(lines[0..], &n_lines, p);
+                const le = lineEnd(text, p);
+                if (le >= text.len) break;
+                var next = le;
+                if (next < text.len and text[next] == '\n') next += 1;
+                if (next <= p or next >= end) break;
+                p = next;
             }
-        }
-        if (!dup and n_lines < MaxCarets) {
-            lines[n_lines] = ls;
-            n_lines += 1;
+        } else {
+            pushUniqueLine(lines[0..], &n_lines, lineStart(text, r.caret));
         }
     }
     // Sort high→low for stable edits
@@ -1636,10 +1658,19 @@ pub fn handleKeys(
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }
-    // Tab / Shift+Tab: indent / outdent at soft-wrap visual line starts.
+    // Tab / Shift+Tab in multi-line:
+    // - Shift+Tab → outdent hard lines with carets/selections
+    // - Tab with selection → indent those hard lines
+    // - Tab with collapsed carets → insert a real tab character at each caret
     // Caller sets Ui.consumed_tab so focus cycling skips this frame.
     if (multiline and input.keyPressed(.tab) and !ctrl and !alt) {
-        changed = indentLines(edit, buf, len, "  ", shift, font, font_size, wrap_px) or changed;
+        if (shift) {
+            changed = indentLines(edit, buf, len, "  ", true) or changed;
+        } else if (anySelection(edit)) {
+            changed = indentLines(edit, buf, len, "  ", false) or changed;
+        } else {
+            changed = insertText(edit, buf, len, "\t") or changed;
+        }
         edit.coalesce_typing = false;
         edit.ctrl_d_active = false;
     }

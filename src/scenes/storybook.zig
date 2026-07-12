@@ -2,6 +2,7 @@ const std = @import("std");
 const app = @import("../app.zig");
 const ui = @import("../ui/ui.zig");
 const theme_mod = @import("../ui/theme.zig");
+const color_picker = @import("../ui/components/colorPicker.zig");
 const state = @import("state.zig");
 
 /// Overview first, then alphabetical. Feel = springs / game-feel demos.
@@ -12,6 +13,7 @@ const items = [_][]const u8{
     "Button",
     "Checkbox",
     "Collapsible",
+    "ColorPicker",
     "ContextMenu",
     "Dropdown",
     "Feel",
@@ -470,7 +472,7 @@ pub fn frame(a: *app.App) void {
             u.separator();
             u.label(.{ .text = "Multi-line text area — soft wrap, multi-caret, column select, resize grip" });
             u.label(.{
-                .text = "Alt+Shift+↑/↓: add caret · Alt+Shift+drag: column select · Tab/Shift+Tab: indent · Ctrl+D: next match",
+                .text = "Alt+Shift+↑/↓: add caret · Alt+Shift+drag: column select · Tab: insert tab (or indent if selection) · Shift+Tab: outdent · Ctrl+D: next match",
                 .color = u.theme.text_dim,
             });
             _ = u.textArea(.{
@@ -482,6 +484,36 @@ pub fn frame(a: *app.App) void {
                 .rows = 3,
                 .max_height = 160,
             });
+            u.separator();
+            u.label(.{ .text = "With hard-line numbers (gutter) — Tab inserts \\t mid-line; select lines then Tab to indent" });
+            _ = u.textArea(.{
+                .id = "sb_code",
+                .label = "Code",
+                .buf = &st.code_buf,
+                .len = &st.code_len,
+                .w = @min(360, dw - 48),
+                .rows = 6,
+                .max_height = 200,
+                .line_numbers = true,
+            });
+        } else if (eq(tab, "ColorPicker")) {
+            u.label(.{ .text = "ColorPicker — sinebow drag scrub; click to edit #hex" });
+            u.label(.{
+                .text = "Drag = rainbow hue · Click = type hex digits (Backspace) · # optional, auto-lowercased",
+                .color = u.theme.text_dim,
+            });
+            _ = u.colorPicker(.{
+                .id = "sb_cp",
+                .label = "Accent",
+                .color = &st.pick_color,
+                .w = 280,
+            });
+            // Live swatch preview
+            const sw = u.alloc(48, 48);
+            u.drawRectBorder(sw, st.pick_color, u.theme.panel_border, 1);
+            var hbuf: [7]u8 = undefined;
+            const hs = color_picker.formatHex(st.pick_color, &hbuf);
+            u.label(.{ .text = hs, .color = u.theme.text_dim });
         } else if (eq(tab, "Theme")) {
             u.label(.{ .text = "Theme selection" });
             u.label(.{ .text = "Choose a palette (applies app-wide):", .color = u.theme.text_dim });

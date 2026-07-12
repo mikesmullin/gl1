@@ -43,9 +43,13 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
     body_w = @max(body_w, 80);
     body_h = @max(body_h, lh + 12);
 
+    const want_gutter = @hasField(@TypeOf(opts), "line_numbers") and opts.line_numbers;
+    // Gutter wide enough for 2–3 digit hard-line numbers.
+    const gutter_w: f32 = if (want_gutter) 36 else 0;
+
     const text = opts.buf[0..opts.len.*];
     // Soft-wrap row count for scroll (display-only; buffer may be one long hard line).
-    const wrap_px: f32 = @max(0, body_w - 12);
+    const wrap_px: f32 = @max(0, body_w - gutter_w - 12);
     const nlines = te.countSoftRows(text, ui.font, size, wrap_px);
     const content_h = @as(f32, @floatFromInt(nlines)) * lh + 12;
     const view_h = body_h;
@@ -54,14 +58,16 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
     const total_h = view_h + 14 + label_gap;
     const r = ui.alloc(body_w, total_h);
     ui.drawText(r.x, r.y, size, ui.theme.text_dim, opts.label);
-    const box = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = body_w, .h = view_h };
+    const outer = Rect{ .x = r.x, .y = r.y + 12 + label_gap, .w = body_w, .h = view_h };
+    // Text field box sits to the right of the optional line-number gutter.
+    const box = Rect{ .x = outer.x + gutter_w, .y = outer.y, .w = body_w - gutter_w, .h = view_h };
 
-    // Grip hit target: on the live ghost while resizing, else committed box corner.
-    var gr = Rect{ .x = box.x + box.w - grip, .y = box.y + box.h - grip, .w = grip, .h = grip };
+    // Grip hit target: outer SE corner (includes optional gutter width).
+    var gr = Rect{ .x = outer.x + body_w - grip, .y = outer.y + view_h - grip, .w = grip, .h = grip };
     if (ed.resizing and ed.resize_preview_w > 0 and ed.resize_preview_h > 0) {
         gr = .{
-            .x = box.x + ed.resize_preview_w - grip,
-            .y = box.y + ed.resize_preview_h - grip,
+            .x = outer.x + ed.resize_preview_w - grip,
+            .y = outer.y + ed.resize_preview_h - grip,
             .w = grip,
             .h = grip,
         };
@@ -87,8 +93,8 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
             ed.resize_preview_h = std.math.clamp(ed.resize_start_h + dy, lh + 12, max_h);
             // Keep grip under cursor for the rest of this frame's draw.
             gr = .{
-                .x = box.x + ed.resize_preview_w - grip,
-                .y = box.y + ed.resize_preview_h - grip,
+                .x = outer.x + ed.resize_preview_w - grip,
+                .y = outer.y + ed.resize_preview_h - grip,
                 .w = grip,
                 .h = grip,
             };
@@ -109,7 +115,7 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
         if (gop) |g| {
             if (!g.found_existing) g.value_ptr.* = 0;
             const dy = ui.wheelY();
-            if (dy != 0 and box.contains(ui.input.mouse_x, ui.input.mouse_y) and !gr.contains(ui.input.mouse_x, ui.input.mouse_y)) {
+            if (dy != 0 and outer.contains(ui.input.mouse_x, ui.input.mouse_y) and !gr.contains(ui.input.mouse_x, ui.input.mouse_y)) {
                 g.value_ptr.* -= dy * lh;
                 ui.eatScroll();
             }
@@ -128,28 +134,80 @@ pub fn textArea(ui: anytype, opts: anytype) bool {
     if (ed.resizing) {
         // Ghost: empty field shell at the preview size (no text/layout thrash).
         const ghost = Rect{
-            .x = box.x,
-            .y = box.y,
+            .x = outer.x,
+            .y = outer.y,
             .w = ed.resize_preview_w,
             .h = ed.resize_preview_h,
         };
         // Dim placeholder of the committed slot so layout space stays visible.
-        ui.drawRectBorder(box, .{ 0.06, 0.07, 0.09, 0.35 }, ui.theme.panel_border, 1);
+        ui.drawRectBorder(outer, .{ 0.06, 0.07, 0.09, 0.35 }, ui.theme.panel_border, 1);
         // Live preview shell (matches input chrome, accent border while active).
         ui.drawRectBorder(ghost, ui.theme.input_bg, ui.theme.accent, 1);
         // Optional label hint inside ghost
         ui.drawText(ghost.x + 6, ghost.y + 4, size, ui.theme.text_dim, "…");
         drawGrip(ui, gr, grip_col);
     } else {
-        changed = textFieldCore.textFieldCore(ui, .{
-            .id_key = i.a,
-            .box = box,
-            .buf = opts.buf,
-            .len = opts.len,
-            .multiline = true,
-            .size = size,
-            .scroll_y = scroll,
-        });
+        if (want_gutter) {
+            // One rectangle around gutter + text (no second focus ring from textFieldCore).
+            const border_col = if (focused) ui.theme.accent else ui.theme.panel_border;
+            ui.drawRectBorder(outer, ui.theme.input_bg, border_col, 1);
+            // Gutter plate inset so it never redraws a second border column.
+            ui.drawRect(.{
+                .x = outer.x + 1,
+                .y = outer.y + 1,
+                .w = gutter_w - 1,
+                .h = outer.h - 2,
+            }, .{ 0.10, 0.11, 0.13, 1 });
+            // Subtle divider between gutter and text (not a focus chrome).
+            ui.drawRect(.{
+                .x = outer.x + gutter_w - 1,
+                .y = outer.y + 1,
+                .w = 1,
+                .h = outer.h - 2,
+            }, ui.theme.panel_border);
+            // Hard-line numbers aligned to the first soft row of each hard line.
+            var rows_buf: [te.MaxSoftRows]te.VisualRow = undefined;
+            const nrows = te.layoutSoft(text, ui.font, size, wrap_px, rows_buf[0..]);
+            var hard_n: u32 = 1;
+            var ri: usize = 0;
+            while (ri < nrows) : (ri += 1) {
+                const vr = rows_buf[ri];
+                const is_hard_start = vr.start == 0 or (vr.start > 0 and text[vr.start - 1] == '\n');
+                if (!is_hard_start) continue;
+                const y = outer.y + 4 - scroll + @as(f32, @floatFromInt(ri)) * lh;
+                if (y + lh < outer.y or y > outer.y + outer.h) {
+                    hard_n += 1;
+                    continue;
+                }
+                var nbuf: [8]u8 = undefined;
+                const ns = std.fmt.bufPrint(&nbuf, "{d}", .{hard_n}) catch "?";
+                const nm = ui.font.measure(ns, size);
+                ui.drawText(outer.x + gutter_w - 6 - nm.w, y, size, ui.theme.text_dim, ns);
+                hard_n += 1;
+            }
+            changed = textFieldCore.textFieldCore(ui, .{
+                .id_key = i.a,
+                .box = box,
+                // Full field including gutter for hover/focus hit-testing.
+                .hit_box = outer,
+                .buf = opts.buf,
+                .len = opts.len,
+                .multiline = true,
+                .size = size,
+                .scroll_y = scroll,
+                .show_border = false,
+            });
+        } else {
+            changed = textFieldCore.textFieldCore(ui, .{
+                .id_key = i.a,
+                .box = box,
+                .buf = opts.buf,
+                .len = opts.len,
+                .multiline = true,
+                .size = size,
+                .scroll_y = scroll,
+            });
+        }
         drawGrip(ui, gr, grip_col);
     }
 

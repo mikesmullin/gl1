@@ -107,6 +107,11 @@ pub const State = struct {
     /// Legacy bool kept in sync with theme_id for inspector/palette toggles.
     theme_cool: bool = false,
     color_idx: usize = 0,
+    /// Storybook ColorPicker demo (RGBA 0..1).
+    pick_color: [4]f32 = .{ 0.3, 0.85, 0.4, 1 },
+    /// Storybook TextInput line-numbers example.
+    code_buf: [512]u8 = undefined,
+    code_len: usize = 0,
     /// Storybook splitter demo left width.
     sb_split_w: f32 = 160,
     sb_menu_status: [48]u8 = undefined,
@@ -189,6 +194,15 @@ pub const State = struct {
         ;
         @memcpy(self.notes[0..note.len], note);
         self.notes_len = note.len;
+        const code =
+            \\// line numbers demo
+            \\fn main() void {
+            \\    const msg = "hello";
+            \\    _ = msg;
+            \\}
+        ;
+        @memcpy(self.code_buf[0..code.len], code);
+        self.code_len = code.len;
         self.initWorld();
     }
 

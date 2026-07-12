@@ -29,19 +29,15 @@ pub const ScrollPhys = struct {
     bounce_dur: f32 = 0.34,
     /// Last measured max scroll (from endScroll).
     max_scroll: f32 = 0,
+    /// Time of last wheel event — suppresses bounce while the user is still overscrolling.
+    last_wheel_time: f64 = -1000,
 
     const friction: f32 = 6.5; // 1/s exponential decay
     const min_vel: f32 = 12; // px/s — stop momentum
     const wheel_px: f32 = 48; // px per wheel "notch" (sokol scroll units ~1)
-    const rubber_k: f32 = 0.42; // overscroll travel scale
-    const max_over: f32 = 72; // soft cap on overscroll distance
-
-    fn rubber(excess: f32) f32 {
-        // Diminishing: large input → less extra travel.
-        const e = @abs(excess);
-        const r = ScrollPhys.rubber_k * e / (1 + e * 0.035);
-        return @min(r, ScrollPhys.max_over);
-    }
+    const max_over: f32 = 36; // soft cap on overscroll distance (~half prior)
+    /// After wheel stops, wait this long before elastic bounce-back (avoids end jitter).
+    const wheel_settle_s: f64 = 0.12;
 
     fn startBounce(self: *ScrollPhys, now: f64, target: f32) void {
         self.mode = .bounce;
@@ -58,12 +54,18 @@ pub const ScrollPhys = struct {
         }
     }
 
+    fn wheelRecently(self: *const ScrollPhys, now: f64) bool {
+        return (now - self.last_wheel_time) < ScrollPhys.wheel_settle_s;
+    }
+
     /// Integrate momentum / bounce for one frame.
     fn tick(self: *ScrollPhys, dt: f32, now: f64) void {
         const max_s = self.max_scroll;
         switch (self.mode) {
             .idle => {
-                // Safety: if somehow parked outside bounds, soft-return.
+                // Hold overscroll while the user is still wheel-pushing past the end.
+                // Bounce only after wheel settles — hard snap here was the jitter source.
+                if (self.wheelRecently(now)) return;
                 if (self.y < -0.5) self.startBounce(now, 0) else if (self.y > max_s + 0.5) self.startBounce(now, max_s);
             },
             .momentum => {
@@ -71,20 +73,22 @@ pub const ScrollPhys = struct {
                 // Exponential friction (frame-rate independent).
                 self.vel *= @exp(-ScrollPhys.friction * dt);
 
-                // Resist when past edges (rubber while coasting).
+                // Resist when past edges (rubber while coasting) — never hard-clamp.
                 if (self.y < 0) {
                     self.y *= 0.85;
                     self.vel *= 0.55;
-                    if (self.vel > -ScrollPhys.min_vel) {
-                        self.startBounce(now, 0);
+                    if (@abs(self.vel) < ScrollPhys.min_vel) {
+                        self.vel = 0;
+                        if (!self.wheelRecently(now)) self.startBounce(now, 0);
                         return;
                     }
                 } else if (self.y > max_s) {
                     const over = self.y - max_s;
                     self.y = max_s + over * 0.85;
                     self.vel *= 0.55;
-                    if (self.vel < ScrollPhys.min_vel) {
-                        self.startBounce(now, max_s);
+                    if (@abs(self.vel) < ScrollPhys.min_vel) {
+                        self.vel = 0;
+                        if (!self.wheelRecently(now)) self.startBounce(now, max_s);
                         return;
                     }
                 }
@@ -92,9 +96,9 @@ pub const ScrollPhys = struct {
                 if (@abs(self.vel) < ScrollPhys.min_vel) {
                     self.vel = 0;
                     if (self.y < 0) {
-                        self.startBounce(now, 0);
+                        if (!self.wheelRecently(now)) self.startBounce(now, 0);
                     } else if (self.y > max_s) {
-                        self.startBounce(now, max_s);
+                        if (!self.wheelRecently(now)) self.startBounce(now, max_s);
                     } else {
                         self.mode = .idle;
                     }
@@ -119,29 +123,49 @@ pub const ScrollPhys = struct {
         }
     }
 
-    /// Wheel/trackpad delta: `wheel` is sokol scroll_y (positive = fingers up / content should go down → decrease y? 
-    /// Existing convention: y -= dy * scale, so positive wheel decreases scroll offset (shows content above).
+    /// Wheel/trackpad delta: `wheel` is sokol scroll_y.
+    /// Existing convention: positive wheel → scroll content down (increase y).
     fn applyWheel(self: *ScrollPhys, wheel: f32, now: f64) void {
         self.cancelBounce();
-        // Convert wheel to scroll delta in content-offset space (positive = scroll down).
+        self.last_wheel_time = now;
         const delta = -wheel * ScrollPhys.wheel_px;
         const max_s = self.max_scroll;
 
-        // Immediate step with rubber-band past ends.
-        var next = self.y + delta;
-        if (next < 0) {
-            next = -ScrollPhys.rubber(-next);
-        } else if (next > max_s) {
-            next = max_s + ScrollPhys.rubber(next - max_s);
+        // Incremental rubber: resist further motion past edges; never re-project
+        // absolute position through rubber (that remapped every notch → jitter).
+        var d = delta;
+        if (self.y >= max_s and delta > 0) {
+            const over = self.y - max_s;
+            d = delta / (1.0 + over * 0.12);
+        } else if (self.y <= 0 and delta < 0) {
+            const over = -self.y;
+            d = delta / (1.0 + over * 0.12);
+        } else if (self.y < max_s and self.y + delta > max_s) {
+            // Crossing bottom edge: full motion to edge, resisted remainder.
+            const room = max_s - self.y;
+            const excess = delta - room;
+            d = room + excess / (1.0 + excess * 0.08);
+        } else if (self.y > 0 and self.y + delta < 0) {
+            const room = self.y;
+            const excess = (-delta) - room;
+            d = -(room + excess / (1.0 + excess * 0.08));
         }
-        self.y = next;
 
-        // Impart momentum so a flick keeps coasting a little.
-        self.vel += delta * 14;
-        // Cap coast speed.
-        self.vel = std.math.clamp(self.vel, -2400, 2400);
-        self.mode = .momentum;
-        _ = now;
+        self.y += d;
+        // Soft travel cap only (not a hard end-of-list clamp).
+        if (self.y > max_s + ScrollPhys.max_over) self.y = max_s + ScrollPhys.max_over;
+        if (self.y < -ScrollPhys.max_over) self.y = -ScrollPhys.max_over;
+
+        const past_end = self.y < 0 or self.y > max_s;
+        if (past_end) {
+            // Hold elastic pose while wheel continues; bounce starts after settle.
+            self.vel = 0;
+            self.mode = .idle;
+        } else {
+            self.vel += delta * 14;
+            self.vel = std.math.clamp(self.vel, -2400, 2400);
+            self.mode = .momentum;
+        }
     }
 };
 
@@ -188,6 +212,8 @@ pub const Ui = struct {
 
     /// Persistent text-edit state keyed by widget id hash.
     edits: std.AutoHashMap(u64, te.Edit) = undefined,
+    /// Sinebow color picker ephemeral state (hex edit / scrub t).
+    color_picks: std.AutoHashMap(u64, components.colorPicker.State) = undefined,
 
     hot: Id = .{},
     active: Id = .{},
@@ -298,6 +324,7 @@ pub const Ui = struct {
         self.scroll_phys = std.AutoHashMap(u64, ScrollPhys).init(allocator);
         self.text_bufs = std.AutoHashMap(u64, []u8).init(allocator);
         self.edits = std.AutoHashMap(u64, te.Edit).init(allocator);
+        self.color_picks = std.AutoHashMap(u64, components.colorPicker.State).init(allocator);
         self.inited = true;
     }
 
@@ -311,6 +338,7 @@ pub const Ui = struct {
         self.scroll_y.deinit();
         self.scroll_phys.deinit();
         self.edits.deinit();
+        self.color_picks.deinit();
         self.inited = false;
     }
 
@@ -319,6 +347,12 @@ pub const Ui = struct {
             // fallback static — shouldn't happen
             unreachable;
         };
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        return gop.value_ptr;
+    }
+
+    pub fn colorPickState(self: *Ui, key: u64) *components.colorPicker.State {
+        const gop = self.color_picks.getOrPut(key) catch unreachable;
         if (!gop.found_existing) gop.value_ptr.* = .{};
         return gop.value_ptr;
     }
@@ -642,6 +676,16 @@ pub const Ui = struct {
         self.drawRect(inner, fill);
     }
 
+    /// Stroke only (no fill). Safe for focus rings over existing chrome.
+    pub fn drawRectOutline(self: *Ui, r: Rect, color: Color, thickness: f32) void {
+        const t = @max(1, thickness);
+        if (r.w <= 0 or r.h <= 0) return;
+        self.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = t }, color);
+        self.drawRect(.{ .x = r.x, .y = r.y + r.h - t, .w = r.w, .h = t }, color);
+        self.drawRect(.{ .x = r.x, .y = r.y, .w = t, .h = r.h }, color);
+        self.drawRect(.{ .x = r.x + r.w - t, .y = r.y, .w = t, .h = r.h }, color);
+    }
+
     pub fn drawRectBorderFront(self: *Ui, r: Rect, fill: Color, border: Color, thickness: f32) void {
         self.drawRectFront(r, border);
         const inner = Rect{
@@ -732,7 +776,15 @@ pub const Ui = struct {
         return test_r.contains(self.input.mouse_x, self.input.mouse_y);
     }
 
-    pub fn interact(self: *Ui, i: Id, r: Rect, disabled: bool) struct { hot: bool, active: bool, clicked: bool } {
+    pub const Interact = struct { hot: bool, active: bool, clicked: bool };
+
+    pub fn interact(self: *Ui, i: Id, r: Rect, disabled: bool) Interact {
+        return self.interactEx(i, r, disabled, .{});
+    }
+
+    /// `focus_ring`: draw accent outline when focused. Set false when a parent
+    /// already paints a single chrome border (e.g. text area + line-number gutter).
+    pub fn interactEx(self: *Ui, i: Id, r: Rect, disabled: bool, opts: struct { focus_ring: bool = true }) Interact {
         self.remember(i, r);
         if (!disabled and self.tab_count < MaxPrev) {
             self.tab_ids[self.tab_count] = i;
@@ -751,9 +803,9 @@ pub const Ui = struct {
         }
         const is_active = self.active.eq(i);
         const clicked = is_active and self.input.mouseReleased(.left) and over;
-        // Keyboard focus ring (phase 7): accent outline when this id has text/tab focus.
-        if (self.focus.eq(i)) {
-            self.drawRectBorder(.{ .x = r.x - 1, .y = r.y - 1, .w = r.w + 2, .h = r.h + 2 }, .{ 0, 0, 0, 0 }, self.theme.accent, 1);
+        // Outline only (never fill). Parent chrome may own the border instead.
+        if (opts.focus_ring and self.focus.eq(i)) {
+            self.drawRectOutline(.{ .x = r.x - 1, .y = r.y - 1, .w = r.w + 2, .h = r.h + 2 }, self.theme.accent, 1);
         }
         return .{ .hot = is_hot, .active = is_active, .clicked = clicked };
     }
@@ -1040,6 +1092,18 @@ pub const Ui = struct {
         return components.slider.slider(self, opts);
     }
 
+    /// Sinebow color picker (drag rainbow / click to edit `#rrggbb`).
+    pub fn colorPicker(self: *Ui, opts: struct {
+        id: []const u8,
+        label: []const u8,
+        color: *Color,
+        /// When set (e.g. "-"), drawn instead of hex; disables click-to-edit.
+        display_override: ?[]const u8 = null,
+        w: f32 = 200,
+    }) bool {
+        return components.colorPicker.colorPicker(self, opts);
+    }
+
     pub fn textInput(self: *Ui, opts: struct {
         id: []const u8,
         label: []const u8,
@@ -1064,6 +1128,8 @@ pub const Ui = struct {
         min_height: f32 = 0,
         max_height: f32 = 0,
         h: f32 = 0, // legacy explicit height; if >0 used as min
+        /// Draw hard-line numbers in a left gutter.
+        line_numbers: bool = false,
     }) bool {
         return components.textArea.textArea(self, opts);
     }
@@ -1396,15 +1462,13 @@ pub const Ui = struct {
 
         var scroll_vis: f32 = 0;
         if (self.scroll_phys.getPtr(frame.id.a)) |sp| {
-            const prev_max = sp.max_scroll;
             sp.max_scroll = max_scroll;
-            // Content shrank: keep offset in range without a hard snap-fight.
-            if (max_scroll < prev_max and sp.mode == .idle and sp.y > max_scroll) {
-                sp.y = max_scroll;
-            }
-            // Empty / non-scrollable: settle to 0.
-            if (max_scroll <= 0 and sp.mode == .idle and sp.y != 0) {
+            // Content shrank or empty: elastic settle — never hard-clamp y here
+            // (hard clamp fought wheel overscroll and caused end jitter).
+            if (max_scroll <= 0 and sp.mode == .idle and sp.y != 0 and !sp.wheelRecently(self.time)) {
                 sp.startBounce(self.time, 0);
+            } else if (sp.mode == .idle and sp.y > max_scroll + 0.5 and !sp.wheelRecently(self.time)) {
+                sp.startBounce(self.time, max_scroll);
             }
             // Thumb uses clamped scroll so it never leaves the track during overscroll.
             scroll_vis = std.math.clamp(sp.y, 0, max_scroll);

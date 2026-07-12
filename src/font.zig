@@ -6,6 +6,16 @@ const sokol = @import("sokol");
 const sg = sokol.gfx;
 const sgl = sokol.gl;
 
+/// How many mono columns a tab advances to the next stop (global, configurable).
+/// `\t` is never drawn as a glyph — it expands to this many space-widths at tab stops.
+pub var tab_columns: u32 = 4;
+
+/// Columns to advance for a tab at the given 0-based column within the line.
+pub fn tabAdvanceColumns(col: u32) u32 {
+    const tw = if (tab_columns == 0) 1 else tab_columns;
+    return tw - (col % tw);
+}
+
 /// Game9 Font mono1 layout on glyphs-outline.bmp (194×34).
 pub const Font = struct {
     border: u32 = 1,
@@ -114,22 +124,32 @@ pub const Font = struct {
         var x: f32 = 0;
         var max_w: f32 = 0;
         var lines: f32 = 1;
+        var col: u32 = 0;
         const adv = self.advance(size);
         const lh = self.lineHeight(size);
         for (text) |ch| {
             if (ch == '\n') {
                 max_w = @max(max_w, x);
                 x = 0;
+                col = 0;
                 lines += 1;
                 continue;
             }
+            if (ch == '\t') {
+                const n = tabAdvanceColumns(col);
+                x += adv * @as(f32, @floatFromInt(n));
+                col += n;
+                continue;
+            }
             x += adv;
+            col += 1;
         }
         max_w = @max(max_w, x);
         return .{ .w = max_w, .h = lines * lh };
     }
 
     /// Draw text with top-left origin. Color multiplies atlas (white glyphs → tint).
+    /// Tabs advance like spaces (see `tab_columns`); no glyph is drawn for `\t`.
     pub fn draw(self: *const Font, x: f32, y: f32, size: f32, color: [4]f32, text: []const u8) void {
         if (self.image.id == 0) return;
         const adv = self.advance(size);
@@ -144,10 +164,18 @@ pub const Font = struct {
 
         var cx = x;
         var cy = y;
+        var col: u32 = 0;
         for (text) |ch| {
             if (ch == '\n') {
                 cx = x;
                 cy += lh;
+                col = 0;
+                continue;
+            }
+            if (ch == '\t') {
+                const n = tabAdvanceColumns(col);
+                cx += adv * @as(f32, @floatFromInt(n));
+                col += n;
                 continue;
             }
             const uv = self.glyphUv(ch);
@@ -156,6 +184,7 @@ pub const Font = struct {
             sgl.v2fT2f(cx + gw, cy + gh, uv.u_max, uv.v_max);
             sgl.v2fT2f(cx, cy + gh, uv.u_min, uv.v_max);
             cx += adv;
+            col += 1;
         }
         sgl.end();
         sgl.disableTexture();

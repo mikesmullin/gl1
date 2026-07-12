@@ -97,6 +97,63 @@ fn applyName(st: *state.State) void {
     }
 }
 
+const MixedColor = struct {
+    value: [4]f32,
+    mixed: bool,
+};
+
+fn aggColor(st: *const state.State) MixedColor {
+    var first = true;
+    var v: [4]f32 = .{ 0.5, 0.5, 0.5, 1 };
+    var mixed = false;
+    var i: usize = 0;
+    while (i < state.max_entities) : (i += 1) {
+        if (!st.isSelected(i)) continue;
+        const c = st.entities[i].color;
+        if (first) {
+            v = c;
+            first = false;
+        } else {
+            var k: usize = 0;
+            while (k < 4) : (k += 1) {
+                if (@abs(c[k] - v[k]) > 1e-3) mixed = true;
+            }
+        }
+    }
+    return .{ .value = v, .mixed = mixed };
+}
+
+fn applyColor(st: *state.State, c: [4]f32) void {
+    var i: usize = 0;
+    while (i < state.max_entities) : (i += 1) {
+        if (!st.isSelected(i)) continue;
+        st.entities[i].color = c;
+    }
+}
+
+/// Scratch color for the inspector picker (synced from selection when mask changes).
+var insp_color: [4]f32 = .{ 0.5, 0.5, 0.5, 1 };
+var insp_color_mask: u32 = 0xFFFFFFFF;
+
+fn colorPickerRow(u: *ui.Ui, st: *state.State, id: []const u8, label: []const u8, w: f32) void {
+    const ag = aggColor(st);
+    if (st.canvas_sel_mask != insp_color_mask) {
+        insp_color_mask = st.canvas_sel_mask;
+        insp_color = ag.value;
+    }
+    // Show "-" when selection has mixed colors (drag/click still writes one color to all).
+    if (u.colorPicker(.{
+        .id = id,
+        .label = label,
+        .color = &insp_color,
+        .display_override = if (ag.mixed) "-" else null,
+        .w = w,
+    })) {
+        applyColor(st, insp_color);
+        insp_color_mask = st.canvas_sel_mask;
+    }
+}
+
 /// Header row with title left and a collapse icon float-right.
 fn panelHeaderCollapse(u: anytype, title: []const u8, collapse_id: []const u8, icon: ui.IconId) bool {
     const row_h = u.theme.row_h;
@@ -296,6 +353,10 @@ pub fn draw(a: *app.App) void {
             floatSlider(u, st, "ed_ry", "Rot Y", "rot_y", -180, 180, sw);
             floatSlider(u, st, "ed_rz", "Rot Z", "rot_z", -180, 180, sw);
             floatSlider(u, st, "ed_sc", "Scale", "scale", 0.1, 4.0, sw);
+
+            u.separator();
+            u.label(.{ .text = "Appearance", .color = u.theme.text_dim });
+            colorPickerRow(u, st, "ed_col", "Color", sw);
 
             u.separator();
             u.label(.{ .text = "Delete removes selection (Del key)", .color = u.theme.text_dim });
