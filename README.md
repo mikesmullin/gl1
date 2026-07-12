@@ -35,6 +35,22 @@ zig build macos-arm64    # requires macOS SDK / frameworks
 zig build macos-x64
 ```
 
+### Publish a release
+
+```bash
+# Build linux + windows zips under dist/ (no upload)
+python3 tools/release.py --platforms linux,windows --skip-upload
+
+# Build and upload to GitHub Releases (needs `gh auth login`)
+python3 tools/release.py --platforms linux,windows
+
+# Optional: macOS (fails on Linux without SDK — run on a Mac)
+python3 tools/release.py --platforms macos --macos-arch arm64
+```
+
+Each zip is named `gl1-{version}-{triple}.zip` and contains the binary plus
+`assets/` (fonts, icons, demo image) and a short `README.txt`.
+
 ---
 
 ## Scenes overview
